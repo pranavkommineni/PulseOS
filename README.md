@@ -23,7 +23,7 @@ software-health-rsul-framework/
 │       ├── protocol.md
 │       └── results/
 │
-├── firmware/                            # PERSON 1
+├── firmware/                            # PRANAV
 │   ├── CMakeLists.txt / sdkconfig       # ESP-IDF project
 │   ├── main/
 │   │   ├── tasks/                      # sensor, inference, comm, monitoring, health_manager
@@ -36,7 +36,7 @@ software-health-rsul-framework/
 │   │   └── log_to_json.py              # serial log -> schema-conformant JSON
 │   └── tests/
 │
-├── health-intelligence/                 # PERSON 2
+├── health-intelligence/                 # KRATAGYA
 │   ├── requirements.txt
 │   ├── src/health_intel/
 │   │   ├── ingestion/                  # reads Person 1's stream
@@ -51,7 +51,7 @@ software-health-rsul-framework/
 │   ├── data/{raw,processed,synthetic}/
 │   └── tests/
 │
-├── rsul-control/                        # PERSON 3
+├── rsul-control/                        # PRAPANN
 │   ├── requirements.txt
 │   ├── src/rsul_control/
 │   │   ├── rsul/                       # rsul_model.py, uncertainty.py
