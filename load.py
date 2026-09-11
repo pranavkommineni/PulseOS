@@ -19,9 +19,10 @@ except ImportError:
 BAUD_RATE = 115200
 CSV_PATH = "amr_dataset.csv"
 XLSX_PATH = "amr_dataset.xlsx"
-XLSX_REWRITE_EVERY_N_ROWS = 5  # how often to refresh the .xlsx snapshot
+XLSX_REWRITE_EVERY_N_ROWS = 15
 
-EXPECTED_HEADER_PREFIX = "timestamp_ms,cpu_util_pct,ai_task_cpu_pct,motor_task_cpu_pct"
+# Matches the start of the header line printed by esp32_amr_monitor.ino
+EXPECTED_HEADER_PREFIX = "timestamp,sample_id,uptime_ms,scenario_id"
 
 
 def find_esp32_port():
@@ -30,7 +31,6 @@ def find_esp32_port():
     if not ports:
         return None
 
-    # Common ESP32 USB-UART chip identifiers (CP210x, CH340, FTDI)
     keywords = [
         "CP210",
         "CH340",
@@ -46,7 +46,6 @@ def find_esp32_port():
         if any(k.upper() in desc for k in keywords):
             return p.device
 
-    # Fallback: if exactly one serial port exists, assume it's the ESP32
     if len(ports) == 1:
         return ports[0].device
 
@@ -126,7 +125,8 @@ def main():
 
     print(f"LIVE: connected to ESP32 on {port} @ {BAUD_RATE} baud")
     print(
-        f"Logging to {CSV_PATH} (and refreshing {XLSX_PATH} every {XLSX_REWRITE_EVERY_N_ROWS} rows). Ctrl+C to stop."
+        f"Logging to {CSV_PATH} (and refreshing {XLSX_PATH} every {XLSX_REWRITE_EVERY_N_ROWS} rows). "
+        f"3 rows are written per monitoring cycle (one per task). Ctrl+C to stop."
     )
 
     if args.fault:
@@ -140,7 +140,6 @@ def main():
         while True:
             raw = ser.readline().decode(errors="ignore").strip()
             if not raw:
-                # No data within timeout -> connection may have dropped
                 if ser.in_waiting == 0 and not ser.is_open:
                     print("NOT LIVE: serial connection lost.")
                     break
