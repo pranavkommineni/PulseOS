@@ -1,31 +1,3 @@
-"""
-AMR Predictive Reliability - Laptop Data Logger
-------------------------------------------------
-Run this on your LAPTOP (not the ESP32). It:
-  1. Scans USB serial ports for a connected ESP32.
-  2. If found -> prints "LIVE: connected to <port>" and streams/collects the CSV
-     rows the ESP32 firmware prints, saving them to:
-        - amr_dataset.csv   (append-friendly, opens directly in Excel)
-        - amr_dataset.xlsx  (rewritten periodically, native Excel file)
-  3. If NOT found -> prints "NOT LIVE: no ESP32 detected" and exits (or retries).
-
-REQUIREMENTS (install once):
-    pip install pyserial pandas openpyxl
-
-WHERE TO RUN:
-    On your laptop, in a terminal, in the same folder as this file:
-        python laptop_logger.py
-    (Make sure the ESP32 is flashed with esp32_amr_monitor.ino and plugged in via USB
-     BEFORE running this script, or just run the script and plug it in -- it retries.)
-
-USAGE:
-    python laptop_logger.py                  # auto-detect port
-    python laptop_logger.py --port COM5      # Windows: force a specific port
-    python laptop_logger.py --port /dev/ttyUSB0   # Linux
-    python laptop_logger.py --port /dev/cu.usbserial-0001  # macOS
-    python laptop_logger.py --fault          # also sends 'F' to start fault injection
-"""
-
 import argparse
 import csv
 import os
