@@ -1,0 +1,6 @@
+# Person 2 Health Intelligence System Dependencies
+# Core engine is written in standard Python 3.10+ with zero mandatory external binary dependencies.
+# Optional data science libraries for extended experimentation and analysis:
+numpy>=1.24.0 [optional]
+pandas>=2.0.0 [optional]
+scikit-learn>=1.2.0 [hjk]

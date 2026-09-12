@@ -8,3 +8,4 @@
 * Developed a **Python laptop data logger** using PySerial to collect ESP32 telemetry and generate CSV/Excel datasets.
 * Debugged ESP32 queue compilation issues and established **USB serial connection on COM9**.
 * Currently debugging **ESP32 telemetry transmission to the Python logger**.
+* Developed and committed **Health Intelligence Engine**.
