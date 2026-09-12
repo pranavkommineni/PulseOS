@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PulseOS Person 2 to Person 3 interface",
+  "oneOf": [
+    {
+      "title": "Detailed 47-field contract",
+      "type": "object",
+      "required": ["timestamp", "cpu_mean", "cpu_std", "cpu_min", "cpu_max", "cpu_trend", "cpu_growth_rate", "memory_mean", "memory_std", "memory_trend", "memory_growth_rate", "heap_trend", "heap_growth_rate", "stack_trend", "stack_growth_rate", "latency_mean", "latency_max", "latency_trend", "latency_growth_rate", "task_delay_trend", "deadline_miss_rate", "deadline_trend", "queue_trend", "queue_growth_rate", "cpu_health_score", "memory_health_score", "stack_health_score", "task_health_score", "timing_health_score", "ai_health_score", "resource_health_score", "overall_health_score", "health_state", "cpu_overload_flag", "memory_leak_flag", "heap_exhaustion_flag", "stack_risk_flag", "deadline_miss_flag", "task_starvation_flag", "ai_latency_flag", "queue_overflow_flag", "fault_type", "fault_severity", "fault_count", "degradation_index", "degradation_rate", "health_change_rate"]
+    },
+    {
+      "title": "Legacy PulseOS compact contract",
+      "type": "object",
+      "required": ["timestamp", "shi", "health_state", "degradation_rate"],
+      "properties": {
+        "timestamp": {},
+        "shi": {"type": "number"},
+        "health_state": {"type": "string"},
+        "degradation_rate": {"type": "number"},
+        "degradation_acceleration": {"type": "number"},
+        "root_cause": {"type": "string"},
+        "cause_confidence": {"type": "number"}
+      }
+    }
+  ]
+}
