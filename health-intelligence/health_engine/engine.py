@@ -128,6 +128,17 @@ class HealthIntelligenceEngine:
         cleaned_reading: CleanedReading = self.validator.validate_and_clean(raw_dict)
         cleaned_data = cleaned_reading.data
 
+        # Step 1b: Reject unrecoverable input (e.g. no timestamp AND no uptime_ms).
+        # Without a temporal anchor nothing downstream (history, trends, degradation
+        # rates) can be computed safely, so we short-circuit with a valid-but-inert
+        # 47-key contract response instead of letting a None timestamp/mean crash
+        # the pipeline further down.
+        if not cleaned_reading.is_valid:
+            fallback = self._build_invalid_input_output(cleaned_reading)
+            if return_diagnostics:
+                return fallback, self.diagnostics.get_all_explanations()
+            return fallback
+
         # Step 2: History & Reset Management
         is_reset, reset_reason = self.history.add_reading(
             cleaned_data=cleaned_data,
@@ -275,7 +286,13 @@ class HealthIntelligenceEngine:
 
         # Step 9: Degradation Analysis, Rates & Health State Classification
         overall_health = health_scores["overall_health_score"]
-        curr_ts = cleaned_data.get("timestamp", 0.0)
+        # NOTE: dict.get(key, default) only substitutes the default when the key
+        # is absent, not when it's present with value None. cleaned_data always
+        # contains a "timestamp" key (possibly None), so the default above was
+        # silently ignored. Guard explicitly instead.
+        curr_ts = cleaned_data.get("timestamp")
+        if curr_ts is None:
+            curr_ts = 0.0
 
         degradation_index = self.degradation.compute_degradation_index(
             overall_health=overall_health,
@@ -368,6 +385,60 @@ class HealthIntelligenceEngine:
             return clean_output, self.diagnostics.get_all_explanations()
         return clean_output
 
+    def _build_invalid_input_output(self, cleaned_reading: CleanedReading) -> Dict[str, Any]:
+        """
+        Build a safe, fully contract-compliant (47-key) output for input that the
+        validator could not anchor in time (no timestamp and no uptime_ms). All
+        numeric/statistical fields are None, booleans are False, fault_type is
+        NONE, and health_state is UNKNOWN so downstream consumers can distinguish
+        this from an actual healthy reading rather than receiving a crash.
+        """
+        output: Dict[str, Any] = {key: None for key in PRODUCTION_OUTPUT_KEYS}
+        output.update({
+            "timestamp": 0.0,
+            "cpu_trend": "INSUFFICIENT_DATA",
+            "memory_trend": "INSUFFICIENT_DATA",
+            "heap_trend": "INSUFFICIENT_DATA",
+            "stack_trend": "INSUFFICIENT_DATA",
+            "latency_trend": "INSUFFICIENT_DATA",
+            "task_delay_trend": "INSUFFICIENT_DATA",
+            "deadline_miss_rate": 0.0,
+            "deadline_trend": "INSUFFICIENT_DATA",
+            "queue_trend": "INSUFFICIENT_DATA",
+            "health_state": "UNKNOWN",
+            "cpu_overload_flag": False,
+            "memory_leak_flag": False,
+            "heap_exhaustion_flag": False,
+            "stack_risk_flag": False,
+            "deadline_miss_flag": False,
+            "task_starvation_flag": False,
+            "ai_latency_flag": False,
+            "queue_overflow_flag": False,
+            "fault_type": "NONE",
+            "fault_severity": "NONE",
+            "fault_count": 0,
+            "degradation_index": 1.0,
+        })
+
+        self.diagnostics.record_explanation(
+            MetricExplanation(
+                metric="overall_health_score",
+                value=None,
+                formula="N/A - input rejected before scoring",
+                input_metrics_used=[],
+                derived_features_used=[],
+                normalized_values={},
+                weights_contributions={},
+                historical_window_points=self.history.history_length(),
+                confidence=cleaned_reading.confidence,
+                reason=(
+                    "Input rejected: "
+                    + "; ".join(cleaned_reading.anomalies or ["MISSING_TEMPORAL_ANCHOR"])
+                ),
+            )
+        )
+        return self._sanitize_for_json(output)
+
     def get_diagnostics(self, metric_name: Optional[str] = None) -> Any:
         """Retrieve diagnostic traces without modifying the stream or output contract."""
         if metric_name:
@@ -422,7 +493,7 @@ class HealthIntelligenceEngine:
             MetricExplanation(
                 metric="fault_type",
                 value=fault_results.fault_type,
-                formula="Argmax evidence score over 17 diagnostic categories with multi-fault detection",
+                formula="Argmax evidence score over 11 diagnostic categories with multi-fault detection",
                 input_metrics_used=["cpu_utilization", "heap_utilization", "dropped_messages", "deadline_misses"],
                 derived_features_used=["queue_pressure", "dropped_message_ratio", "ai_latency_pressure"],
                 normalized_values=fault_results.cause_contributions,

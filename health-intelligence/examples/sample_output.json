@@ -44,6 +44,6 @@
   "fault_severity": "HIGH",
   "fault_count": 1,
   "degradation_index": 0.7469,
-  "degradation_rate": 0.07525,
+  "degradation_rate": 0.07282,
   "health_change_rate": -6.1459
 }

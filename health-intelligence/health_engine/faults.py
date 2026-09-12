@@ -1,7 +1,7 @@
 """
 Fault Detection, Root-Cause Analysis, Severity Classification, and Fault Counting.
 
-Evaluates 8 multi-metric boolean fault flags, ranks candidate root causes across 17
+Evaluates 8 multi-metric boolean fault flags, ranks candidate root causes across 11
 internal diagnostic categories, determines fault severity, and counts active fault conditions.
 """
 
@@ -105,7 +105,7 @@ class FaultDetector:
         task_starvation = False
         if sched_delay is not None and sched_delay >= self.config.timing.task_starvation_min_delay_ms:
             task_starvation = True
-        elif task_state in ("READY", "BLOCKED") and task_cpu == 0.0 and curr_cpu is not None and curr_cpu > 85.0:
+        elif task_state in ("READY", "BLOCKED") and task_cpu is not None and task_cpu < 1e-6 and curr_cpu is not None and curr_cpu > 85.0:
             task_starvation = True
 
         # 7. AI Latency Flag
@@ -238,7 +238,12 @@ class FaultDetector:
 
         # Scheduling Overload
         sched_ol = 1.0 - (domain_scores.get("task_health_score", 100.0) / 100.0)
-        if reading.get("context_switches") is not None and stats.get("cpu_mean", 0) > 80:
+        # NOTE: stats.get("cpu_mean", 0) previously ignored its default whenever
+        # "cpu_mean" was present-but-None (i.e. cpu_utilization never observed in
+        # the window), raising "'>' not supported between NoneType and int".
+        # Guard explicitly instead of relying on dict.get's default.
+        cpu_mean_val = stats.get("cpu_mean")
+        if reading.get("context_switches") is not None and cpu_mean_val is not None and cpu_mean_val > 80:
             sched_ol += 0.2
         c["SCHEDULING_OVERLOAD"] = min(1.0, round(sched_ol, 3))
 
@@ -321,7 +326,18 @@ class FaultDetector:
             return "CRITICAL"
 
         # High severity
-        if fault_count >= 2 or overall_health <= 50.0 or fault_type in ("HEAP_EXHAUSTION", "STACK_RISK", "CPU_OVERLOAD", "MEMORY_LEAK"):
+        # NOTE: the "named dangerous category" clause used to fire on its own,
+        # with no requirement that any fault flag was actually active. That let
+        # a merely-dominant (but sub-threshold, "significant"-tier ~0.35-0.5
+        # evidence) root cause label force fault_severity=HIGH even when
+        # fault_count==0 and overall_health was in the 90s - contradicting the
+        # rest of the output. It's now gated on fault_count >= 1 so it can only
+        # escalate an already-real, currently-active fault to HIGH.
+        if (
+            fault_count >= 2
+            or overall_health <= 50.0
+            or (fault_count >= 1 and fault_type in ("HEAP_EXHAUSTION", "STACK_RISK", "CPU_OVERLOAD", "MEMORY_LEAK"))
+        ):
             if fault_type != "NONE":
                 return "HIGH"
 
