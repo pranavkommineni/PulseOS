@@ -99,7 +99,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default=None, help="Force a specific serial port")
     parser.add_argument(
-        "--fault", action="store_true", help="Send 'F' to start fault injection"
+        "--load",
+        choices=["low", "normal", "high"],
+        default=None,
+        help="Send 'L'/'N'/'H' to set the ESP32's load level on startup",
     )
     parser.add_argument(
         "--retry-seconds",
@@ -129,9 +132,10 @@ def main():
         f"3 rows are written per monitoring cycle (one per task). Ctrl+C to stop."
     )
 
-    if args.fault:
-        ser.write(b"F\n")
-        print("Sent fault-injection START command to ESP32.")
+    if args.load:
+        cmd = {"low": b"L\n", "normal": b"N\n", "high": b"H\n"}[args.load]
+        ser.write(cmd)
+        print(f"Sent load_level={args.load.upper()} command to ESP32.")
 
     header_cols = None
     row_count = 0

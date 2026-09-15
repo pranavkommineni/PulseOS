@@ -1,31 +1,51 @@
 """
-Live pipeline: data_collection -> JSON -> health-intelligence -> CSV.
+Live pipeline: data_collection -> JSON -> health-intelligence -> rsul-control -> CSV.
 
-Previously the two subsystems only talked to each other on paper:
+Previously the subsystems only talked to each other on paper:
   - data_collection/load.py read the ESP32's serial CSV lines and wrote them
     straight to amr_dataset.csv / .xlsx.
   - health-intelligence had its own engine, exercised only by
     examples/demo_stream.py against synthetic data.
-Nothing actually piped live telemetry from one into the other.
+  - rsul-control had its own prediction engine, exercised only by predict.py
+    against a static synthetic training CSV (data/synthetic/person2_dummy_training_2000.csv).
+Nothing actually piped live telemetry all the way from one into the next.
 
-This script is the real pipe between them:
+This script is the real pipe between all three:
 
     ESP32 (serial, CSV lines)
         -> parsed into a Python dict
         -> converted to a JSON object                          [data collection]
         -> saved to amr_dataset.csv (raw telemetry, as received)
         -> HealthIntelligenceEngine.process_reading(json_str)   [health intelligence]
-        -> 47-key health JSON output
+        -> 47-key health JSON output (the locked Person-2 contract)
         -> saved to health_intelligence_output.csv (health scores/trends/faults)
+        -> rsul_control.prediction.engine.predict_payload(...)  [rsul control]
+        -> RSUL / failure-probability / recommendation JSON output
+        -> saved to rsul_control_output.csv (final production output)
         -> printed to the terminal at most once per second
 
-JSON is what travels between data_collection and health-intelligence in
-memory; two CSV files are what gets persisted to disk — one per side.
+JSON is what travels between the three subsystems in memory; three CSV files
+are what gets persisted to disk — amr_dataset.csv and
+health_intelligence_output.csv are untouched by this integration (same
+columns, same write logic as before), and rsul_control_output.csv is the new
+third stage.
+
+The health-intelligence output already matches rsul-control's locked
+47-field "detailed" Person-2 contract column-for-column (see
+rsul-control/src/rsul_control/adapter/person2_contract.py), so no field
+mapping is needed between those two stages — the health JSON is fed to
+predict_payload() as-is. The one adjustment made here: health-intelligence's
+`timestamp` is seconds since the engine started, while rsul-control's
+prediction engine expects a real, parseable datetime (it computes a
+*calendar* predicted-critical-time). So for live/replay data this script
+substitutes the actual wall-clock time of the reading before handing it to
+rsul-control; the original health-intelligence `timestamp` value is left
+untouched in health_intelligence_output.csv.
 
 Usage:
     python integration/live_pipeline.py                  # live ESP32 over serial
     python integration/live_pipeline.py --port COM9       # force a serial port
-    python integration/live_pipeline.py --fault           # also start fault injection
+    python integration/live_pipeline.py --load high        # start the ESP32 at HIGH load
     python integration/live_pipeline.py --interval 2      # print every 2s instead of 1s
     python integration/live_pipeline.py --demo            # no hardware or CSV needed —
                                                             # runs the whole pipeline
@@ -33,7 +53,10 @@ Usage:
     python integration/live_pipeline.py --replay path/to/amr_dataset.csv
                                                             # streams an existing raw
                                                             # CSV through the same
-                                                            # JSON -> engine -> CSV path
+                                                            # JSON -> engine -> engine -> CSV path
+    python integration/live_pipeline.py --rsul-model random_forest --rsul-threshold 120
+                                                            # pick rsul-control's model /
+                                                            # latency threshold (ms)
 
 Note: the ESP32 firmware (arduino_ide.ino) only prints its CSV header line
 once, right after boot. If the board was already running before this script
@@ -54,11 +77,15 @@ from pathlib import Path
 INTEGRATION_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = INTEGRATION_DIR.parent
 HEALTH_INTEL_DIR = PROJECT_ROOT / "health-intelligence"
+RSUL_CONTROL_SRC_DIR = PROJECT_ROOT / "rsul-control" / "src"
 
-# Make `from health_engine.engine import HealthIntelligenceEngine` resolvable
+# Make `from health_engine.engine import HealthIntelligenceEngine` and
+# `from rsul_control.prediction.engine import predict_payload` resolvable
 # regardless of the working directory the script is run from.
 if str(HEALTH_INTEL_DIR) not in sys.path:
     sys.path.insert(0, str(HEALTH_INTEL_DIR))
+if str(RSUL_CONTROL_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(RSUL_CONTROL_SRC_DIR))
 
 try:
     import serial
@@ -75,8 +102,41 @@ except ImportError as e:
         f"Run this script from the PulseOS-main repo root. ({e})"
     )
 
+try:
+    from rsul_control.prediction.engine import predict_payload
+except ImportError as e:
+    sys.exit(
+        "Could not import predict_payload from rsul-control/. "
+        f"Run this script from the PulseOS-main repo root, and "
+        f"`pip install -r rsul-control/requirements.txt`. ({e})"
+    )
+
 BAUD_RATE = 115200
 OUTPUT_CSV_PATH = "health_intelligence_output.csv"
+
+# Final production output: health-intelligence's readings run through
+# rsul-control's prediction engine. Column order is just the key order
+# predict_payload() returns (see rsul-control/src/rsul_control/prediction/engine.py).
+RSUL_OUTPUT_CSV_PATH = "rsul_control_output.csv"
+RSUL_OUTPUT_KEYS = [
+    "timestamp",
+    "current_health",
+    "health_state",
+    "current_degradation_rate",
+    "predicted_health",
+    "predicted_degradation_rate",
+    "predicted_critical_time",
+    "failure_probability",
+    "risk_level",
+    "predicted_rsul_hours",
+    "predicted_failure_time",
+    "rsul_confidence",
+    "dominant_degradation_factor",
+    "factor_contribution",
+    "recommendation",
+    "recommendation_priority",
+    "compatibility_mode",
+]
 
 # Matches the start of the header line printed by arduino_ide.ino
 EXPECTED_HEADER_PREFIX = "timestamp,sample_id,uptime_ms,scenario_id"
@@ -89,18 +149,59 @@ EXPECTED_HEADER_PREFIX = "timestamp,sample_id,uptime_ms,scenario_id"
 # a header line on the wire is simply recognized and skipped rather than
 # being the only way to learn the schema.
 HEADER_COLS = [
-    "timestamp", "sample_id", "uptime_ms", "scenario_id", "cpu_utilization",
-    "cpu_idle", "task_cpu_utilization", "total_heap", "free_heap", "used_heap",
-    "heap_utilization", "minimum_free_heap", "stack_high_water_mark",
-    "stack_utilization", "task_name", "task_priority", "task_state",
-    "task_execution_time", "task_period", "task_jitter", "task_execution_count",
-    "deadline_misses", "context_switches", "task_switches", "scheduler_delay",
-    "active_task_count", "inference_time", "min_inference_time",
-    "max_inference_time", "average_inference_time", "inference_count",
-    "inference_frequency", "queue_length", "queue_capacity", "queue_utilization",
-    "messages_sent", "messages_received", "dropped_messages", "interrupt_count",
-    "interrupt_latency", "power_consumption", "system_temperature",
-    "watchdog_resets", "system_resets",
+    # The first 44 are the locked health-intelligence contract (see
+    # health-intelligence/health_engine/validator.py: REQUIRED_INPUT_METRICS)
+    # and must stay in this exact name/order.
+    "timestamp",
+    "sample_id",
+    "uptime_ms",
+    "scenario_id",
+    "cpu_utilization",
+    "cpu_idle",
+    "task_cpu_utilization",
+    "total_heap",
+    "free_heap",
+    "used_heap",
+    "heap_utilization",
+    "minimum_free_heap",
+    "stack_high_water_mark",
+    "stack_utilization",
+    "task_name",
+    "task_priority",
+    "task_state",
+    "task_execution_time",
+    "task_period",
+    "task_jitter",
+    "task_execution_count",
+    "deadline_misses",
+    "context_switches",
+    "task_switches",
+    "scheduler_delay",
+    "active_task_count",
+    "inference_time",
+    "min_inference_time",
+    "max_inference_time",
+    "average_inference_time",
+    "inference_count",
+    "inference_frequency",
+    "queue_length",
+    "queue_capacity",
+    "queue_utilization",
+    "messages_sent",
+    "messages_received",
+    "dropped_messages",
+    "interrupt_count",
+    "interrupt_latency",
+    "power_consumption",
+    "system_temperature",
+    "watchdog_resets",
+    "system_resets",
+    # Appended by the current firmware (arduino_ide.ino), after the locked 44.
+    # health-intelligence ignores unknown keys, so these are safe extras.
+    "heap_churn_bytes",
+    "heap_alloc_failures",
+    "distance_cm",
+    "ultrasonic_timeouts",
 ]
 
 HEARTBEAT_SECONDS = 5.0  # print a "still waiting" message if no data arrives
@@ -110,6 +211,7 @@ RAW_CSV_PATH = "amr_dataset.csv"
 # --------------------------------------------------------------------------
 # Serial connection helpers (same detection logic data_collection/load.py uses)
 # --------------------------------------------------------------------------
+
 
 def find_esp32_port():
     """Look for a plausible ESP32 USB-serial device. Returns port name or None."""
@@ -154,6 +256,7 @@ def try_connect(port):
 # data_collection side: raw serial line -> JSON
 # --------------------------------------------------------------------------
 
+
 def row_to_reading(row_line, header_cols):
     """Turn one raw CSV line from the ESP32 into a reading dict."""
     values = row_line.strip().split(",")
@@ -166,6 +269,7 @@ def row_to_reading(row_line, header_cols):
 # health-intelligence side: reading -> JSON -> health JSON out -> CSV rows
 # --------------------------------------------------------------------------
 
+
 def ensure_output_csv_header():
     if not os.path.exists(OUTPUT_CSV_PATH):
         with open(OUTPUT_CSV_PATH, "w", newline="") as f:
@@ -175,6 +279,22 @@ def ensure_output_csv_header():
 def append_output_csv_row(health_json):
     with open(OUTPUT_CSV_PATH, "a", newline="") as f:
         csv.writer(f).writerow([health_json.get(k, "") for k in PRODUCTION_OUTPUT_KEYS])
+
+
+# --------------------------------------------------------------------------
+# rsul-control side: health JSON -> rsul prediction JSON out -> CSV rows
+# --------------------------------------------------------------------------
+
+
+def ensure_rsul_csv_header():
+    if not os.path.exists(RSUL_OUTPUT_CSV_PATH):
+        with open(RSUL_OUTPUT_CSV_PATH, "w", newline="") as f:
+            csv.writer(f).writerow(RSUL_OUTPUT_KEYS)
+
+
+def append_rsul_csv_row(rsul_json):
+    with open(RSUL_OUTPUT_CSV_PATH, "a", newline="") as f:
+        csv.writer(f).writerow([rsul_json.get(k, "") for k in RSUL_OUTPUT_KEYS])
 
 
 def ensure_raw_csv_header():
@@ -190,11 +310,20 @@ def append_raw_csv_row(reading):
         )
 
 
-def process_reading(engine, reading, convert_timestamp_ms=True):
-    """Convert one reading to JSON, feed it to the health engine, log both ends.
+def process_reading(
+    engine,
+    reading,
+    convert_timestamp_ms=True,
+    rsul_model="linear_regression",
+    rsul_threshold=100.0,
+):
+    """Convert one reading to JSON, feed it through health-intelligence, then
+    through rsul-control, logging all three stages.
 
     - the raw telemetry, exactly as received, is stored in RAW_CSV_PATH
-    - the health engine's output is stored in OUTPUT_CSV_PATH
+    - the health engine's output is stored in OUTPUT_CSV_PATH (unchanged)
+    - rsul-control's prediction on top of that health output is stored in
+      RSUL_OUTPUT_CSV_PATH (the new, final production output)
 
     convert_timestamp_ms: the firmware's `timestamp` field is millis() since
     boot (milliseconds), but the health engine's windowing/reset logic
@@ -220,16 +349,31 @@ def process_reading(engine, reading, convert_timestamp_ms=True):
     health_json = engine.process_reading(json.dumps(payload))
     ensure_output_csv_header()
     append_output_csv_row(health_json)
-    return health_json
+
+    # health-intelligence's `timestamp` is elapsed seconds since the engine
+    # started, not a calendar date. rsul-control needs a real, parseable
+    # datetime to compute a predicted *calendar* critical time, so swap in
+    # the actual wall-clock moment of this reading for the rsul-control call
+    # only — health_intelligence_output.csv keeps the original value.
+    rsul_payload = dict(health_json)
+    rsul_payload["timestamp"] = datetime.now().isoformat()
+    rsul_json = predict_payload(rsul_payload, rsul_model, rsul_threshold)
+    ensure_rsul_csv_header()
+    append_rsul_csv_row(rsul_json)
+
+    return health_json, rsul_json
 
 
-def print_health_json(health_json):
+def print_health_json(health_json, rsul_json=None):
     print(json.dumps(health_json))
+    if rsul_json is not None:
+        print(json.dumps(rsul_json))
 
 
 # --------------------------------------------------------------------------
 # Live (serial) mode
 # --------------------------------------------------------------------------
+
 
 def run_live(args):
     if serial is None:
@@ -251,14 +395,15 @@ def run_live(args):
 
     print(f"LIVE: connected to ESP32 on {port} @ {BAUD_RATE} baud")
     print(
-        f"data_collection -> JSON -> health-intelligence -> "
-        f"{RAW_CSV_PATH} + {OUTPUT_CSV_PATH} "
+        f"data_collection -> JSON -> health-intelligence -> rsul-control -> "
+        f"{RAW_CSV_PATH} + {OUTPUT_CSV_PATH} + {RSUL_OUTPUT_CSV_PATH} "
         f"(terminal updates every {args.interval:g}s). Ctrl+C to stop."
     )
 
-    if args.fault:
-        ser.write(b"F\n")
-        print("Sent fault-injection START command to ESP32.")
+    if args.load:
+        cmd = {"low": b"L\n", "normal": b"N\n", "high": b"H\n"}[args.load]
+        ser.write(cmd)
+        print(f"Sent load_level={args.load.upper()} command to ESP32.")
 
     engine = HealthIntelligenceEngine()
     row_count = 0
@@ -292,13 +437,19 @@ def run_live(args):
                     print("WARNING: malformed row, skipping:", raw)
                 continue
 
-            health_json = process_reading(engine, reading, convert_timestamp_ms=True)
+            health_json, rsul_json = process_reading(
+                engine,
+                reading,
+                convert_timestamp_ms=True,
+                rsul_model=args.rsul_model,
+                rsul_threshold=args.rsul_threshold,
+            )
             row_count += 1
             last_data_ts = time.monotonic()
 
             now = time.monotonic()
             if now - last_print_ts >= args.interval:
-                print_health_json(health_json)
+                print_health_json(health_json, rsul_json)
                 last_print_ts = now
 
     except KeyboardInterrupt:
@@ -313,12 +464,16 @@ def run_live(args):
                 "pressing its reset button) so the firmware reboots and starts "
                 "sending data after the port is open."
             )
-        print(f"{row_count} readings processed. Final CSVs: {RAW_CSV_PATH}, {OUTPUT_CSV_PATH}")
+        print(
+            f"{row_count} readings processed. Final CSVs: "
+            f"{RAW_CSV_PATH}, {OUTPUT_CSV_PATH}, {RSUL_OUTPUT_CSV_PATH}"
+        )
 
 
 # --------------------------------------------------------------------------
 # Replay mode (no hardware required — streams an existing raw CSV)
 # --------------------------------------------------------------------------
+
 
 def run_replay(args):
     src_path = args.replay
@@ -332,8 +487,8 @@ def run_replay(args):
         )
 
     print(
-        f"REPLAY: {src_path} -> JSON -> health-intelligence -> "
-        f"{RAW_CSV_PATH} + {OUTPUT_CSV_PATH} "
+        f"REPLAY: {src_path} -> JSON -> health-intelligence -> rsul-control -> "
+        f"{RAW_CSV_PATH} + {OUTPUT_CSV_PATH} + {RSUL_OUTPUT_CSV_PATH} "
         f"(terminal updates every {args.interval:g}s). Ctrl+C to stop."
     )
 
@@ -349,12 +504,18 @@ def run_replay(args):
             for row in reader:
                 reading = {k: row[k] for k in header_cols}
 
-                health_json = process_reading(engine, reading, convert_timestamp_ms=True)
+                health_json, rsul_json = process_reading(
+                    engine,
+                    reading,
+                    convert_timestamp_ms=True,
+                    rsul_model=args.rsul_model,
+                    rsul_threshold=args.rsul_threshold,
+                )
                 row_count += 1
 
                 now = time.monotonic()
                 if now - last_print_ts >= args.interval:
-                    print_health_json(health_json)
+                    print_health_json(health_json, rsul_json)
                     last_print_ts = now
 
                 # pace the replay so the once-per-second terminal cadence is
@@ -364,12 +525,16 @@ def run_replay(args):
     except KeyboardInterrupt:
         print("\nStopping replay...")
 
-    print(f"{row_count} readings processed. Final CSVs: {RAW_CSV_PATH}, {OUTPUT_CSV_PATH}")
+    print(
+        f"{row_count} readings processed. Final CSVs: "
+        f"{RAW_CSV_PATH}, {OUTPUT_CSV_PATH}, {RSUL_OUTPUT_CSV_PATH}"
+    )
 
 
 # --------------------------------------------------------------------------
 # Demo mode (no hardware, no CSV needed — generates synthetic telemetry)
 # --------------------------------------------------------------------------
+
 
 def run_demo(args):
     try:
@@ -378,8 +543,8 @@ def run_demo(args):
         sys.exit(f"Could not import SyntheticTelemetryGenerator. ({e})")
 
     print(
-        f"DEMO: synthetic telemetry -> JSON -> health-intelligence -> "
-        f"{RAW_CSV_PATH} + {OUTPUT_CSV_PATH} "
+        f"DEMO: synthetic telemetry -> JSON -> health-intelligence -> rsul-control -> "
+        f"{RAW_CSV_PATH} + {OUTPUT_CSV_PATH} + {RSUL_OUTPUT_CSV_PATH} "
         f"(terminal updates every {args.interval:g}s). Ctrl+C to stop."
     )
 
@@ -395,12 +560,18 @@ def run_demo(args):
 
     try:
         for reading in readings:
-            health_json = process_reading(engine, reading, convert_timestamp_ms=False)
+            health_json, rsul_json = process_reading(
+                engine,
+                reading,
+                convert_timestamp_ms=False,
+                rsul_model=args.rsul_model,
+                rsul_threshold=args.rsul_threshold,
+            )
             row_count += 1
 
             now = time.monotonic()
             if now - last_print_ts >= args.interval:
-                print_health_json(health_json)
+                print_health_json(health_json, rsul_json)
                 last_print_ts = now
 
             if args.replay_speed > 0:
@@ -408,10 +579,14 @@ def run_demo(args):
     except KeyboardInterrupt:
         print("\nStopping demo...")
 
-    print(f"{row_count} readings processed. Final CSVs: {RAW_CSV_PATH}, {OUTPUT_CSV_PATH}")
+    print(
+        f"{row_count} readings processed. Final CSVs: "
+        f"{RAW_CSV_PATH}, {OUTPUT_CSV_PATH}, {RSUL_OUTPUT_CSV_PATH}"
+    )
 
 
 # --------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -419,7 +594,11 @@ def main():
     )
     parser.add_argument("--port", default=None, help="Force a specific serial port")
     parser.add_argument(
-        "--fault", action="store_true", help="Send 'F' to start fault injection"
+        "--load",
+        choices=["low", "normal", "high"],
+        default=None,
+        help="Send 'L'/'N'/'H' to set the ESP32's load level on startup "
+        "(maps to scenario_id 4/1/2 in the firmware)",
     )
     parser.add_argument(
         "--interval",
@@ -445,6 +624,20 @@ def main():
         default=0.3,
         help="Seconds to sleep between replayed rows, to simulate live "
         "streaming (default: 0.3, use 0 for as-fast-as-possible)",
+    )
+    parser.add_argument(
+        "--rsul-model",
+        choices=["linear_regression", "random_forest"],
+        default="linear_regression",
+        help="Which trained rsul-control model to use for the health/degradation/"
+        "latency forecasts (default: linear_regression)",
+    )
+    parser.add_argument(
+        "--rsul-threshold",
+        type=float,
+        default=100.0,
+        help="AI-inference latency (ms) rsul-control treats as the failure "
+        "threshold when computing predicted RSUL hours (default: 100.0)",
     )
     args = parser.parse_args()
 
