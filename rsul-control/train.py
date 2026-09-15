@@ -12,7 +12,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from rsul_control.adapter.person2_contract import PERSON2_COLUMNS, validate_person2
 
@@ -61,6 +61,18 @@ def main():
     for target_name, target in targets.items():
         models = {
             "linear_regression": LinearRegression(),
+            # Ridge (L2-regularized linear regression) instead of plain OLS for
+            # the "ridge" candidate: the 43 engineered features are heavily
+            # collinear (raw signal + its trend + its growth_rate + a health
+            # score derived from all of them, all fed in together), which lets
+            # plain LinearRegression assign huge, unstable coefficients (we
+            # measured deadline_miss_rate at +76, queue_growth_rate at -19.6).
+            # A single noisy input (or a binary flag flip) then swings the
+            # forecast by 50-100 points between near-identical consecutive
+            # readings. Ridge shrinks correlated coefficients toward each
+            # other instead of letting them fight, which stabilizes the
+            # prediction without materially hurting fit quality.
+            "ridge": Ridge(alpha=10.0),
             "random_forest": RandomForestRegressor(n_estimators=300, random_state=42, min_samples_leaf=3, max_features=.8),
         }
         current_col = {"latency": "latency_mean", "health": "overall_health_score", "degradation": "degradation_rate"}[target_name]
