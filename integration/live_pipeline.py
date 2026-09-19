@@ -1379,6 +1379,10 @@ def run_demo(args):
 
 def main():
 
+    # Must be declared before first use anywhere in this function (the
+    # --trend-window default below reads the current global value).
+    global TREND_WINDOW
+
     parser = argparse.ArgumentParser(
         description=(
             "PulseOS live "
@@ -1455,8 +1459,6 @@ def main():
     args = parser.parse_args()
 
     # Update global trend window.
-    global TREND_WINDOW
-
     TREND_WINDOW = max(3, args.trend_window)
 
     if args.replay:

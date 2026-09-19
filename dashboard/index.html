@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PulseOS — Predictive Runtime Health Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#080a0f;
+  --bg-grid: rgba(255,255,255,0.02);
+  --panel:#10131b;
+  --panel-2:#151926;
+  --border: rgba(255,255,255,0.07);
+  --border-strong: rgba(255,255,255,0.13);
+  --text: #e7eaf2;
+  --text-dim: #8890a3;
+  --text-faint: #565d70;
+  --good: #33d6a6;
+  --good-dim: rgba(51,214,166,0.12);
+  --warn: #f2b84b;
+  --warn-dim: rgba(242,184,75,0.12);
+  --bad: #ff5d6c;
+  --bad-dim: rgba(255,93,108,0.12);
+  --info: #5b9dff;
+  --info-dim: rgba(91,157,255,0.12);
+  --violet: #a58cff;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sans: 'Inter', system-ui, sans-serif;
+  --radius: 12px;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{ background:var(--bg); color:var(--text); font-family:var(--sans); }
+body{
+  min-height:100vh;
+  background-image:
+    radial-gradient(ellipse 1200px 500px at 20% -10%, rgba(91,157,255,0.06), transparent),
+    radial-gradient(ellipse 900px 500px at 100% 0%, rgba(51,214,166,0.05), transparent);
+}
+::selection{ background: rgba(91,157,255,.3); }
+
+a{ color:inherit; }
+.mono{ font-family: var(--mono); }
+.dim{ color:var(--text-dim); }
+.faint{ color: var(--text-faint); }
+
+/* ---------- layout shell ---------- */
+.wrap{ max-width:1500px; margin:0 auto; padding: 0 20px 60px; }
+
+/* ---------- header ---------- */
+header.top{
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; justify-content:space-between;
+  gap:16px; padding:14px 20px;
+  background: rgba(8,10,15,0.86);
+  backdrop-filter: blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.brand{ display:flex; flex-direction:column; gap:2px; }
+.brand .name{ font-weight:800; font-size:15px; letter-spacing:0.2px; }
+.brand .sub{ font-size:11.5px; color:var(--text-dim); font-family:var(--mono); }
+
+.live-indicator{ display:flex; align-items:center; gap:10px; }
+.dot{ width:8px; height:8px; border-radius:50%; background:var(--good); box-shadow:0 0 0 3px var(--good-dim); }
+.dot.stale{ background:var(--warn); box-shadow:0 0 0 3px var(--warn-dim); animation: blink 1s infinite; }
+.dot.off{ background:var(--bad); box-shadow:0 0 0 3px var(--bad-dim); }
+@keyframes blink{ 50%{ opacity:.35; } }
+.live-text{ font-family:var(--mono); font-size:12px; letter-spacing:1px; }
+.live-meta{ font-family:var(--mono); font-size:11px; color:var(--text-dim); }
+
+.top-right{ display:flex; align-items:center; gap:18px; }
+.stat-mini{ text-align:right; }
+.stat-mini .k{ font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.08em; }
+.stat-mini .v{ font-family:var(--mono); font-size:13px; }
+
+.pill{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--mono); font-size:11.5px; padding:5px 11px; border-radius:99px;
+  border:1px solid var(--border-strong); white-space:nowrap;
+}
+.pill .pdot{ width:6px; height:6px; border-radius:50%; }
+.pill.healthy{ color:var(--good); background:var(--good-dim); border-color:rgba(51,214,166,.3); }
+.pill.healthy .pdot{ background:var(--good); }
+.pill.warning{ color:var(--warn); background:var(--warn-dim); border-color:rgba(242,184,75,.3); }
+.pill.warning .pdot{ background:var(--warn); }
+.pill.degraded{ color:var(--warn); background:var(--warn-dim); border-color:rgba(242,184,75,.3); }
+.pill.degraded .pdot{ background:var(--warn); }
+.pill.critical{ color:var(--bad); background:var(--bad-dim); border-color:rgba(255,93,108,.3); }
+.pill.critical .pdot{ background:var(--bad); }
+.pill.failure_risk{ color:var(--bad); background:var(--bad-dim); border-color:rgba(255,93,108,.3); }
+.pill.failure_risk .pdot{ background:var(--bad); }
+.pill.neutral{ color:var(--text-dim); background:rgba(255,255,255,.03); }
+.pill.neutral .pdot{ background:var(--text-faint); }
+
+/* ---------- alert bar ---------- */
+#alerts{ margin-top:16px; display:flex; flex-direction:column; gap:8px; }
+.alert{
+  display:flex; align-items:center; gap:10px;
+  border:1px solid rgba(242,184,75,.35); background:var(--warn-dim);
+  border-radius:10px; padding:10px 14px; font-size:13px;
+  animation: alertIn .25s ease-out;
+}
+.alert.crit{ border-color:rgba(255,93,108,.4); background:var(--bad-dim); }
+.alert .ico{ font-size:14px; }
+.alert b{ font-family: var(--mono); letter-spacing:.02em; }
+.alert .msg{ color:var(--text-dim); }
+@keyframes alertIn{ from{opacity:0; transform:translateY(-4px);} to{opacity:1; transform:none;} }
+
+/* ---------- section frame ---------- */
+section{ margin-top:34px; }
+.section-head{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; }
+.section-title{ font-size:12px; font-weight:700; letter-spacing:.14em; color:var(--text-dim); text-transform:uppercase; }
+.section-title span{ color:var(--text-faint); font-weight:500; margin-left:8px; text-transform:none; letter-spacing:normal; }
+.range-toggle{ display:flex; gap:4px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:3px; }
+.range-toggle button{
+  font-family:var(--mono); font-size:11px; padding:4px 9px; border-radius:6px; border:none;
+  background:transparent; color:var(--text-dim); cursor:pointer;
+}
+.range-toggle button.active{ background:var(--panel-2); color:var(--text); }
+
+/* ---------- grid ---------- */
+.grid{ display:grid; gap:14px; }
+.g6{ grid-template-columns: repeat(6,1fr); }
+.g4{ grid-template-columns: repeat(4,1fr); }
+.g3{ grid-template-columns: repeat(3,1fr); }
+.g2{ grid-template-columns: repeat(2,1fr); }
+.span2{ grid-column: span 2; }
+.span3{ grid-column: span 3; }
+.span4{ grid-column: span 4; }
+.span6{ grid-column: span 6; }
+
+.card{
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border:1px solid var(--border); border-radius: var(--radius);
+  padding:16px;
+  position:relative;
+}
+.card.tight{ padding:14px; }
+.card .card-title{
+  font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);
+  margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;
+}
+.card .card-title .badge{
+  font-family:var(--mono); font-size:10px; padding:2px 7px; border-radius:99px; text-transform:none; letter-spacing:0;
+}
+
+/* ---------- executive gauges ---------- */
+.exec-card{ display:flex; flex-direction:column; align-items:center; text-align:center; gap:6px; padding:18px 10px 16px; }
+.gauge-wrap{ position:relative; width:104px; height:104px; }
+.gauge-ring{ width:100%; height:100%; border-radius:50%; }
+.gauge-hole{
+  position:absolute; inset:11px; border-radius:50%;
+  background: radial-gradient(circle at 30% 20%, #171b27, #0d1017);
+  display:flex; align-items:center; justify-content:center; flex-direction:column;
+  border: 1px solid var(--border);
+}
+.gauge-hole .val{ font-family:var(--mono); font-weight:700; font-size:22px; line-height:1; }
+.gauge-hole .unit{ font-size:9px; color:var(--text-faint); margin-top:2px; }
+.exec-label{ font-size:11.5px; font-weight:600; color:var(--text-dim); letter-spacing:.03em; margin-top:2px;}
+.exec-sub{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); }
+
+/* semi gauge for CPU */
+.semi-wrap{ position:relative; width:116px; height:64px; overflow:hidden; }
+.semi-ring{ position:absolute; top:0; left:0; width:116px; height:116px; border-radius:50%; }
+.semi-hole{
+  position:absolute; left:12px; top:12px; width:92px; height:92px; border-radius:50%;
+  background: radial-gradient(circle at 30% 20%, #171b27, #0d1017);
+  border: 1px solid var(--border);
+}
+.semi-val{ position:absolute; width:100%; top:32px; text-align:center; font-family:var(--mono); font-weight:700; font-size:19px; }
+
+/* ---------- bars ---------- */
+.bar-row{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.bar-track{ height:9px; border-radius:99px; background:rgba(255,255,255,.06); overflow:hidden; }
+.bar-fill{ height:100%; border-radius:99px; transition: width .4s ease; }
+.big-num{ font-family:var(--mono); font-weight:700; font-size:30px; line-height:1; }
+
+/* ---------- mini stats line ---------- */
+.stat-line{ display:flex; gap:18px; margin-top:10px; flex-wrap:wrap; }
+.stat-item .k{ font-size:9.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.08em; }
+.stat-item .v{ font-family:var(--mono); font-size:13px; margin-top:2px; }
+.trend{ font-family:var(--mono); font-size:11px; }
+.trend.up{ color:var(--bad); }
+.trend.down{ color:var(--good); }
+.trend.stable{ color:var(--text-dim); }
+
+/* ---------- charts ---------- */
+.chart-card canvas{ width:100%; display:block; height:150px; }
+.chart-legend{ display:flex; gap:14px; margin-top:8px; flex-wrap:wrap; }
+.chart-legend .li{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); font-family:var(--mono); }
+.chart-legend .sw{ width:9px; height:9px; border-radius:2px; }
+
+/* ---------- table ---------- */
+table.metrics{ width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12.5px; }
+table.metrics tr{ border-bottom:1px solid var(--border); }
+table.metrics tr:last-child{ border-bottom:none; }
+table.metrics td{ padding:7px 4px; }
+table.metrics td.k{ color:var(--text-dim); }
+table.metrics td.v{ text-align:right; color:var(--text); }
+
+/* ---------- task timeline ---------- */
+.timeline{ display:flex; gap:2px; align-items:flex-end; height:34px; overflow:hidden; margin-top:6px;}
+.timeline .seg{ flex:0 0 auto; width:7px; height:100%; border-radius:2px; opacity:.9; }
+
+/* ---------- fault matrix ---------- */
+.fault-grid{ display:grid; grid-template-columns: repeat(2,1fr); gap:8px 20px; }
+.fault-item{ display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:8px; background:rgba(255,255,255,.02); border:1px solid var(--border); }
+.fault-item .name{ font-size:12.5px; color:var(--text-dim); }
+.fault-status{ font-family:var(--mono); font-size:11px; display:flex; align-items:center; gap:6px; }
+.fault-status.clear{ color:var(--good); }
+.fault-status.active{ color:var(--bad); }
+.fault-status .fdot{ width:6px; height:6px; border-radius:50%; }
+.fault-status.clear .fdot{ background:var(--good); }
+.fault-status.active .fdot{ background:var(--bad); }
+
+/* ---------- health matrix (part2) ---------- */
+.hmatrix{ display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+.hcell{ padding:18px 14px; border-right:1px solid var(--border); border-bottom:1px solid var(--border); background:var(--panel); }
+.hcell:nth-child(4n){ border-right:none; }
+.hcell .hlabel{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); }
+.hcell .hval{ font-family:var(--mono); font-weight:700; font-size:26px; margin:4px 0 6px; }
+
+/* ---------- predictive ---------- */
+.predict-flow{ display:flex; align-items:center; justify-content:center; gap:26px; padding:14px 0 6px; }
+.predict-block{ text-align:center; }
+.predict-block .plabel{ font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.1em; }
+.predict-block .pval{ font-family:var(--mono); font-weight:800; font-size:40px; margin:6px 0; }
+.predict-arrow{ font-size:22px; color:var(--text-faint); }
+
+.rsul-hero{ text-align:center; padding:22px 10px 8px; }
+.rsul-hero .rlabel{ font-size:11px; letter-spacing:.12em; color:var(--text-faint); text-transform:uppercase; }
+.rsul-hero .rval{ font-family:var(--mono); font-weight:800; font-size:54px; margin:8px 0; background:linear-gradient(180deg,#fff,#9fb0d9); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.rsul-hero .rconf{ font-family:var(--mono); font-size:12px; color:var(--text-dim); }
+.rsul-hero .rcrit{ margin-top:10px; font-family:var(--mono); font-size:12px; color:var(--text-faint); }
+
+.factor-row{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.factor-row .flabel{ width:150px; font-size:12px; color:var(--text-dim); flex-shrink:0; }
+.factor-row .ftrack{ flex:1; height:16px; border-radius:5px; background:rgba(255,255,255,.05); overflow:hidden; }
+.factor-row .ffill{ height:100%; border-radius:5px; }
+.factor-row .fpct{ width:44px; text-align:right; font-family:var(--mono); font-size:12px; }
+
+.reco-card{ display:flex; gap:14px; align-items:flex-start; border-left:3px solid var(--warn); }
+.reco-card.priority-CRITICAL{ border-left-color:var(--bad); }
+.reco-card.priority-HIGH{ border-left-color:var(--warn); }
+.reco-card.priority-MEDIUM{ border-left-color:var(--info); }
+.reco-card.priority-LOW{ border-left-color:var(--good); }
+.reco-icon{ font-size:20px; }
+.reco-text{ font-size:14px; line-height:1.5; }
+.reco-priority{ margin-top:10px; }
+
+/* ---------- reliability strip ---------- */
+.reliability-strip{ display:flex; justify-content:space-between; gap:14px; }
+.rel-item{ flex:1; text-align:center; padding:12px; border-radius:10px; background:rgba(255,255,255,.02); border:1px solid var(--border); }
+.rel-item .rk{ font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.08em; }
+.rel-item .rv{ font-family:var(--mono); font-weight:700; font-size:20px; margin-top:4px; }
+.rel-item.nonzero{ border-color:rgba(255,93,108,.4); background:var(--bad-dim); }
+.rel-item.nonzero .rv{ color:var(--bad); }
+
+/* ---------- details toggle ---------- */
+details{ margin-top:8px; }
+summary{ cursor:pointer; font-size:11.5px; color:var(--info); font-family:var(--mono); list-style:none; display:inline-flex; align-items:center; gap:5px; }
+summary::-webkit-details-marker{ display:none; }
+summary:before{ content:'▸'; font-size:9px; transition: transform .15s; }
+details[open] summary:before{ transform: rotate(90deg); }
+details .detail-body{ margin-top:10px; }
+
+footer{ margin-top:50px; padding:20px 0 10px; text-align:center; color:var(--text-faint); font-size:11px; font-family:var(--mono); }
+
+@media (max-width: 1100px){
+  .g6, .g4, .g3{ grid-template-columns: repeat(2,1fr); }
+  .span2, .span3, .span4, .span6{ grid-column: span 2; }
+  .hmatrix{ grid-template-columns:repeat(2,1fr); }
+  .hcell:nth-child(4n){ border-right:1px solid var(--border); }
+  .hcell:nth-child(2n){ border-right:none; }
+  .predict-flow{ flex-direction:column; gap:10px; }
+  .predict-arrow{ transform: rotate(90deg); }
+}
+@media (max-width: 640px){
+  .g6, .g4, .g3, .g2{ grid-template-columns: repeat(1,1fr); }
+  .span2, .span3, .span4, .span6{ grid-column: span 1; }
+  .hmatrix{ grid-template-columns:repeat(1,1fr); }
+  .hcell{ border-right:none !important; }
+  header.top{ flex-wrap:wrap; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="name">PULSEOS <span class="faint" style="font-weight:500;">/ Predictive Runtime Health Monitor</span></div>
+    <div class="sub" id="modeLabel">SOURCE: —</div>
+  </div>
+
+  <div class="live-indicator">
+    <span class="dot off" id="liveDot"></span>
+    <span class="live-text" id="liveText">CONNECTING</span>
+    <span class="live-meta" id="liveMeta">Sample —</span>
+  </div>
+
+  <div class="top-right">
+    <div class="stat-mini"><div class="k">Scenario</div><div class="v" id="hdrScenario">—</div></div>
+    <div class="stat-mini"><div class="k">Uptime</div><div class="v" id="hdrUptime">00:00:00</div></div>
+    <span class="pill neutral" id="statePill"><span class="pdot"></span><span id="statePillText">UNKNOWN</span></span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div id="alerts"></div>
+
+  <!-- ============ EXECUTIVE HEALTH SUMMARY ============ -->
+  <section>
+    <div class="section-head">
+      <div class="section-title">Executive Health Summary <span>current state, in one glance</span></div>
+    </div>
+    <div class="grid g6">
+      <div class="card exec-card">
+        <div class="gauge-wrap"><div class="gauge-ring" id="ringOverall"></div><div class="gauge-hole"><div class="val" id="valOverall">—</div><div class="unit">%</div></div></div>
+        <div class="exec-label">Overall Health</div>
+        <div class="exec-sub" id="subOverall">deg idx — · — /min</div>
+      </div>
+      <div class="card exec-card">
+        <div class="semi-wrap"><div class="semi-ring" id="ringCpu"></div><div class="semi-hole"></div><div class="semi-val" id="valCpu">—</div></div>
+        <div class="exec-label">CPU Health</div>
+        <div class="exec-sub"><span id="subCpuCur">—</span> · <span class="trend" id="subCpuTrend">—</span></div>
+      </div>
+      <div class="card exec-card">
+        <div class="gauge-wrap"><div class="gauge-ring" id="ringMem"></div><div class="gauge-hole"><div class="val" id="valMem">—</div><div class="unit">%</div></div></div>
+        <div class="exec-label">Memory Health</div>
+        <div class="exec-sub" id="subMem">used — / total —</div>
+      </div>
+      <div class="card exec-card">
+        <div class="gauge-wrap"><div class="gauge-ring" id="ringStack"></div><div class="gauge-hole"><div class="val" id="valStack">—</div><div class="unit">%</div></div></div>
+        <div class="exec-label">Stack Health</div>
+        <div class="exec-sub" id="subStack">HWM — · risk —</div>
+      </div>
+      <div class="card exec-card">
+        <div class="gauge-wrap"><div class="gauge-ring" id="ringAi"></div><div class="gauge-hole"><div class="val" id="valAi">—</div><div class="unit">%</div></div></div>
+        <div class="exec-label">AI Health</div>
+        <div class="exec-sub" id="subAi">— ms · — Hz</div>
+      </div>
+      <div class="card exec-card">
+        <div class="gauge-wrap"><div class="gauge-ring" id="ringTiming"></div><div class="gauge-hole"><div class="val" id="valTiming">—</div><div class="unit">%</div></div></div>
+        <div class="exec-label">Timing Health</div>
+        <div class="exec-sub" id="subTiming">misses — · jitter — ms</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LIVE RESOURCE MONITORING ============ -->
+  <section>
+    <div class="section-head">
+      <div class="section-title">Live Resource Monitoring <span>Part 1 · what is happening right now</span></div>
+      <div class="range-toggle" id="rangeToggle">
+        <button data-s="60">60s</button>
+        <button data-s="300" class="active">5m</button>
+        <button data-s="900">15m</button>
+        <button data-s="3600">1h</button>
+      </div>
+    </div>
+    <div class="grid g2">
+      <div class="card chart-card">
+        <div class="card-title">CPU Utilization</div>
+        <canvas id="chartCpu"></canvas>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Current</div><div class="v" id="cpuCur">—</div></div>
+          <div class="stat-item"><div class="k">Mean</div><div class="v" id="cpuMean">—</div></div>
+          <div class="stat-item"><div class="k">Min</div><div class="v" id="cpuMin">—</div></div>
+          <div class="stat-item"><div class="k">Max</div><div class="v" id="cpuMax">—</div></div>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">Memory / Heap</div>
+        <canvas id="chartMem"></canvas>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Used</div><div class="v" id="memUsed">—</div></div>
+          <div class="stat-item"><div class="k">Free</div><div class="v" id="memFree">—</div></div>
+          <div class="stat-item"><div class="k">Min Free</div><div class="v" id="memMinFree">—</div></div>
+          <div class="stat-item"><div class="k">Growth</div><div class="v trend" id="memGrowth">—</div></div>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">Stack Utilization</div>
+        <canvas id="chartStack"></canvas>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Current</div><div class="v" id="stackCur">—</div></div>
+          <div class="stat-item"><div class="k">HWM</div><div class="v" id="stackHwm">—</div></div>
+          <div class="stat-item"><div class="k">Trend</div><div class="v trend" id="stackTrend">—</div></div>
+          <div class="stat-item"><div class="k">Risk</div><div class="v" id="stackRisk">—</div></div>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-title">Inference Latency</div>
+        <canvas id="chartInfer"></canvas>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Current</div><div class="v" id="inferCur">—</div></div>
+          <div class="stat-item"><div class="k">Avg</div><div class="v" id="inferAvg">—</div></div>
+          <div class="stat-item"><div class="k">Min</div><div class="v" id="inferMin">—</div></div>
+          <div class="stat-item"><div class="k">Max</div><div class="v" id="inferMax">—</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TASK & REAL-TIME PERFORMANCE ============ -->
+  <section>
+    <div class="section-head"><div class="section-title">Task &amp; Real-Time Performance</div></div>
+    <div class="grid g2">
+      <div class="card">
+        <div class="card-title">Active Task <span class="badge" id="taskStateBadge" style="background:var(--good-dim);color:var(--good);">RUNNING</span></div>
+        <div style="font-family:var(--mono); font-size:20px; font-weight:700;" id="taskName">—</div>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Priority</div><div class="v" id="taskPriority">—</div></div>
+          <div class="stat-item"><div class="k">Exec Count</div><div class="v" id="taskExecCount">—</div></div>
+          <div class="stat-item"><div class="k">Period</div><div class="v" id="taskPeriod">—</div></div>
+          <div class="stat-item"><div class="k">Jitter</div><div class="v" id="taskJitter">—</div></div>
+        </div>
+        <div class="card-title" style="margin-top:16px;">Execution Timeline <span class="faint">recent task state</span></div>
+        <div class="timeline" id="taskTimeline"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Real-Time Metrics</div>
+        <table class="metrics">
+          <tr><td class="k">Execution Time</td><td class="v" id="tblExecTime">—</td></tr>
+          <tr><td class="k">Scheduler Delay</td><td class="v" id="tblSchedDelay">—</td></tr>
+          <tr><td class="k">Deadline Misses</td><td class="v" id="tblDeadlineMisses">—</td></tr>
+          <tr><td class="k">Context Switches</td><td class="v" id="tblCtxSwitch">—</td></tr>
+          <tr><td class="k">Task Switches</td><td class="v" id="tblTaskSwitch">—</td></tr>
+          <tr><td class="k">Active Task Count</td><td class="v" id="tblActiveTasks">—</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ AI / COMMUNICATION / RELIABILITY ============ -->
+  <section>
+    <div class="section-head"><div class="section-title">AI · Communication · Reliability</div></div>
+    <div class="grid g4">
+      <div class="card">
+        <div class="card-title">AI Inference <span class="pill neutral" id="aiLatencyPill"><span class="pdot"></span>NORMAL</span></div>
+        <div class="big-num" id="aiBig">— ms</div>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Min</div><div class="v" id="aiMin">—</div></div>
+          <div class="stat-item"><div class="k">Avg</div><div class="v" id="aiAvg">—</div></div>
+          <div class="stat-item"><div class="k">Freq</div><div class="v" id="aiFreq">—</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Queue</div>
+        <div class="bar-row"><span class="big-num" style="font-size:22px;" id="queuePct">—%</span><span class="dim mono" id="queueLenCap">—/—</span></div>
+        <div class="bar-track"><div class="bar-fill" id="queueBar" style="width:0%; background:var(--info);"></div></div>
+        <div class="stat-line"><div class="stat-item"><div class="k">Growth</div><div class="v trend" id="queueGrowth">—</div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Messaging</div>
+        <table class="metrics">
+          <tr><td class="k">Sent</td><td class="v" id="msgSent">—</td></tr>
+          <tr><td class="k">Received</td><td class="v" id="msgRecv">—</td></tr>
+          <tr><td class="k">Dropped</td><td class="v" id="msgDropped">—</td></tr>
+          <tr><td class="k">Interrupt Latency</td><td class="v" id="irqLatency">—</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-title">Power &amp; Temperature</div>
+        <div class="stat-line" style="gap:26px;">
+          <div class="stat-item"><div class="k">Power</div><div class="v" style="font-size:18px;" id="powerVal">—</div></div>
+          <div class="stat-item"><div class="k">Temp</div><div class="v" style="font-size:18px;" id="tempVal">—</div></div>
+        </div>
+        <div class="card-title" style="margin-top:14px;">System Reliability</div>
+        <div class="reliability-strip">
+          <div class="rel-item" id="relWatchdog"><div class="rk">Watchdog</div><div class="rv">0</div></div>
+          <div class="rel-item" id="relResets"><div class="rk">Resets</div><div class="rv">0</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PART 2: HEALTH ANALYTICS ============ -->
+  <section>
+    <div class="section-head"><div class="section-title">Health Analytics <span>Part 2 · how healthy is the system</span></div></div>
+    <div class="hmatrix" id="healthMatrix"></div>
+  </section>
+
+  <section>
+    <div class="grid g2">
+      <div class="card chart-card">
+        <div class="card-title">Degradation</div>
+        <canvas id="chartDegradation"></canvas>
+        <div class="stat-line">
+          <div class="stat-item"><div class="k">Index</div><div class="v" id="degIndex">—</div></div>
+          <div class="stat-item"><div class="k">Rate</div><div class="v" id="degRate">—</div></div>
+          <div class="stat-item"><div class="k">Health Δ Rate</div><div class="v" id="degHealthChange">—</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Fault Detection <span class="badge" id="faultCountBadge" style="background:var(--good-dim); color:var(--good);">0 ACTIVE</span></div>
+        <div class="fault-grid" id="faultGrid"></div>
+        <div style="margin-top:12px; display:flex; align-items:center; justify-content:space-between;">
+          <div>
+            <div class="faint" style="font-size:10px; text-transform:uppercase; letter-spacing:.08em;">Fault Summary</div>
+            <div class="mono" id="faultType" style="font-size:13px; margin-top:3px;">No active faults</div>
+          </div>
+          <span class="pill neutral" id="faultSeverityPill"><span class="pdot"></span>—</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PART 3: PREDICTIVE RELIABILITY ============ -->
+  <section>
+    <div class="section-head"><div class="section-title">Predictive Reliability <span>Part 3 · what is going to happen</span></div></div>
+    <div class="grid g2">
+      <div class="card">
+        <div class="card-title">Current → Predicted Health</div>
+        <div class="predict-flow">
+          <div class="predict-block"><div class="plabel">Current</div><div class="pval" id="predCurrent">—</div><span class="pill neutral" id="predCurrentPill"><span class="pdot"></span>—</span></div>
+          <div class="predict-arrow">→</div>
+          <div class="predict-block"><div class="plabel">Predicted</div><div class="pval" id="predFuture">—</div><span class="pill neutral" id="predFuturePill"><span class="pdot"></span>—</span></div>
+        </div>
+        <div class="stat-line" style="justify-content:center; margin-top:10px;">
+          <div class="stat-item"><div class="k">Current Degradation</div><div class="v" id="predCurDeg">—</div></div>
+          <div class="stat-item"><div class="k">Predicted Degradation</div><div class="v" id="predFutDeg">—</div></div>
+        </div>
+      </div>
+      <div class="card exec-card">
+        <div class="gauge-wrap" style="width:120px;height:120px;"><div class="gauge-ring" id="ringFailure"></div><div class="gauge-hole" style="inset:13px;"><div class="val" id="valFailure">—</div><div class="unit">FAILURE PROB.</div></div></div>
+        <span class="pill neutral" id="riskPill" style="margin-top:6px;"><span class="pdot"></span>—</span>
+      </div>
+    </div>
+
+    <div class="grid g2" style="margin-top:14px;">
+      <div class="card">
+        <div class="rsul-hero">
+          <div class="rlabel">Remaining System Useful Life</div>
+          <div class="rval" id="rsulHours">— H</div>
+          <div class="rconf">Confidence <span id="rsulConf">—</span></div>
+          <div class="rcrit">Predicted critical time: <span id="rsulCritTime">—</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Dominant Degradation Factors</div>
+        <div id="factorList" style="margin-top:6px;"></div>
+      </div>
+    </div>
+
+    <div class="card reco-card" id="recoCard" style="margin-top:14px;">
+      <div class="reco-icon">⚠</div>
+      <div>
+        <div class="card-title" style="margin-bottom:6px;">Recommendation</div>
+        <div class="reco-text" id="recoText">Awaiting data…</div>
+        <div class="reco-priority"><span class="pill neutral" id="recoPriorityPill"><span class="pdot"></span>—</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DETAILED LIVE METRICS ============ -->
+  <section>
+    <div class="section-head"><div class="section-title">Detailed Live Metrics <span>complete raw + derived metric coverage</span></div></div>
+    <details>
+      <summary>Expand all raw &amp; derived metrics (Part 1 + Part 2 + Part 3)</summary>
+      <div class="detail-body grid g3">
+        <div class="card"><div class="card-title">Part 1 · Raw Telemetry</div><table class="metrics" id="tblPart1"></table></div>
+        <div class="card"><div class="card-title">Part 2 · Health &amp; Degradation</div><table class="metrics" id="tblPart2"></table></div>
+        <div class="card"><div class="card-title">Part 3 · Predictive</div><table class="metrics" id="tblPart3"></table></div>
+      </div>
+    </details>
+  </section>
+
+  <footer>PulseOS · Predictive Runtime Software Health Monitor · ESP32 → health-intelligence → rsul-control → this dashboard</footer>
+</div>
+
+<script>
+/* =========================================================================
+   Utilities
+   ========================================================================= */
+const $ = (id) => document.getElementById(id);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const num = (v, d=1) => {
+  if (v === undefined || v === null || v === "" || Number.isNaN(Number(v))) return "—";
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: 0});
+};
+const pct = (v, d=0) => (v === undefined || v === null || v === "" || Number.isNaN(Number(v))) ? "—" : `${Number(v).toFixed(d)}%`;
+const fmtBytes = (b) => {
+  if (b === undefined || b === null || Number.isNaN(Number(b))) return "—";
+  b = Number(b);
+  if (b > 1024*1024) return (b/1024/1024).toFixed(2)+" MB";
+  if (b > 1024) return (b/1024).toFixed(1)+" KB";
+  return b+" B";
+};
+const truthy = (v) => v === true || v === "true" || v === "True" || v === 1 || v === "1";
+
+function healthColor(score){
+  score = Number(score);
+  if (Number.isNaN(score)) return "var(--text-faint)";
+  if (score >= 80) return "var(--good)";
+  if (score >= 55) return "var(--warn)";
+  return "var(--bad)";
+}
+function stateClass(state){
+  if (!state) return "neutral";
+  const s = String(state).toLowerCase();
+  if (["healthy"].includes(s)) return "healthy";
+  if (["warning"].includes(s)) return "warning";
+  if (["degraded","degrading"].includes(s)) return "degraded";
+  if (["critical"].includes(s)) return "critical";
+  if (["failure_risk","failure risk"].includes(s)) return "failure_risk";
+  return "neutral";
+}
+function setPill(el, textEl, state, label){
+  el.className = "pill " + stateClass(state);
+  textEl.textContent = label || state || "—";
+}
+
+/* =========================================================================
+   Circular gauge (conic-gradient donut) + semi-circle variant
+   ========================================================================= */
+function paintRing(el, value, max=100){
+  const v = clamp(Number(value)||0, 0, max);
+  const deg = (v/max) * 360;
+  const color = healthColor(v);
+  el.style.background = `conic-gradient(${color} ${deg}deg, rgba(255,255,255,0.07) ${deg}deg)`;
+}
+function paintSemi(el, value, max=100){
+  const v = clamp(Number(value)||0, 0, max);
+  const deg = (v/max) * 180;
+  const color = healthColor(v);
+  el.style.background = `conic-gradient(from 270deg, ${color} ${deg}deg, rgba(255,255,255,0.07) ${deg}deg 180deg, transparent 180deg)`;
+}
+
+/* =========================================================================
+   Rolling line chart (canvas)
+   ========================================================================= */
+class RollingChart{
+  constructor(canvasId, seriesDefs){
+    this.canvas = $(canvasId);
+    this.ctx = this.canvas.getContext('2d');
+    this.series = seriesDefs.map(s => ({...s, points: []})); // {key,color,points:[{t,v}]}
+    this.windowSec = 300;
+    this._resize();
+    window.addEventListener('resize', () => this._resize());
+  }
+  _resize(){
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(200, rect.width) * dpr;
+    this.canvas.height = 150 * dpr;
+    this.ctx.setTransform(dpr,0,0,dpr,0,0);
+    this.w = Math.max(200, rect.width);
+    this.h = 150;
+  }
+  setWindow(sec){ this.windowSec = sec; this.draw(); }
+  push(t, values){
+    this.series.forEach(s => {
+      const v = values[s.key];
+      if (v !== undefined && v !== null && !Number.isNaN(Number(v))) s.points.push({t, v: Number(v)});
+    });
+    const cutoff = t - 3600; // keep up to 1h of history max in memory
+    this.series.forEach(s => { s.points = s.points.filter(p => p.t >= cutoff); });
+    this.draw();
+  }
+  draw(){
+    const {ctx,w,h} = this;
+    ctx.clearRect(0,0,w,h);
+    const now = this.series.reduce((m,s)=> s.points.length ? Math.max(m, s.points[s.points.length-1].t) : m, 0);
+    const from = now - this.windowSec;
+
+    // grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    for(let i=0;i<=4;i++){
+      const y = (h-20) * (i/4) + 8;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+    }
+
+    let allVals = [];
+    this.series.forEach(s => { s.points.forEach(p => { if (p.t >= from) allVals.push(p.v); }); });
+    if (allVals.length === 0) return;
+    let vmin = Math.min(...allVals), vmax = Math.max(...allVals);
+    if (vmin === vmax){ vmin -= 1; vmax += 1; }
+    const pad = (vmax-vmin) * 0.12;
+    vmin -= pad; vmax += pad;
+
+    this.series.forEach(s => {
+      const pts = s.points.filter(p => p.t >= from);
+      if (pts.length < 1) return;
+      ctx.beginPath();
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.75;
+      pts.forEach((p, i) => {
+        const x = ((p.t - from) / this.windowSec) * w;
+        const y = 8 + (h-20) * (1 - (p.v - vmin) / (vmax - vmin));
+        if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.stroke();
+
+      // fill under last series subtly (area) for the first series only
+      if (s.fill){
+        const last = pts[pts.length-1];
+        ctx.lineTo(((last.t-from)/this.windowSec)*w, h-8);
+        ctx.lineTo(((pts[0].t-from)/this.windowSec)*w, h-8);
+        ctx.closePath();
+        ctx.fillStyle = s.color.replace('rgb','rgba').replace(')', ',0.08)').replace('#','#');
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = s.color;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    });
+  }
+}
+
+/* =========================================================================
+   State
+   ========================================================================= */
+const charts = {
+  cpu: new RollingChart('chartCpu', [{key:'cpu', color:'#5b9dff', fill:true}]),
+  mem: new RollingChart('chartMem', [{key:'heap', color:'#a58cff', fill:true}]),
+  stack: new RollingChart('chartStack', [{key:'stack', color:'#f2b84b', fill:true}]),
+  infer: new RollingChart('chartInfer', [{key:'infer', color:'#33d6a6', fill:true}]),
+  deg: new RollingChart('chartDegradation', [{key:'deg', color:'#ff5d6c', fill:true}]),
+};
+
+document.querySelectorAll('#rangeToggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#rangeToggle button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    const sec = Number(btn.dataset.s);
+    charts.cpu.setWindow(sec); charts.mem.setWindow(sec); charts.stack.setWindow(sec); charts.infer.setWindow(sec);
+  });
+});
+
+let cpuAgg = {min: Infinity, max: -Infinity, sum:0, n:0};
+let sampleStartTime = null;
+let lastMsgTime = Date.now();
+let prevFlags = {};
+const FAULT_LABELS = {
+  cpu_overload_flag: "CPU Overload",
+  memory_leak_flag: "Memory Leak",
+  heap_exhaustion_flag: "Heap Exhaustion",
+  stack_risk_flag: "Stack Risk",
+  deadline_miss_flag: "Deadline Miss",
+  task_starvation_flag: "Task Starvation",
+  ai_latency_flag: "AI Latency",
+  queue_overflow_flag: "Queue Overflow",
+};
+// build fault grid skeleton
+(function initFaultGrid(){
+  const grid = $('faultGrid');
+  Object.entries(FAULT_LABELS).forEach(([key,label]) => {
+    const div = document.createElement('div');
+    div.className = 'fault-item';
+    div.innerHTML = `<span class="name">${label}</span><span class="fault-status clear" id="fault_${key}"><span class="fdot"></span>CLEAR</span>`;
+    grid.appendChild(div);
+  });
+})();
+
+const HEALTH_DIMENSIONS = [
+  ["cpu_health_score","CPU"], ["memory_health_score","Memory"], ["stack_health_score","Stack"], ["task_health_score","Task"],
+  ["timing_health_score","Timing"], ["ai_health_score","AI"], ["resource_health_score","Resource"], ["overall_health_score","Overall"],
+];
+(function initHealthMatrix(){
+  const m = $('healthMatrix');
+  HEALTH_DIMENSIONS.forEach(([key,label]) => {
+    const cell = document.createElement('div');
+    cell.className = 'hcell';
+    cell.innerHTML = `<div class="hlabel">${label}</div><div class="hval" id="hm_${key}">—</div><span class="pill neutral" id="hmp_${key}"><span class="pdot"></span>—</span>`;
+    m.appendChild(cell);
+  });
+})();
+
+/* =========================================================================
+   Rendering
+   ========================================================================= */
+function renderAlert(key, label, active){
+  const id = `alert_${key}`;
+  const existing = document.getElementById(id);
+  if (active && !existing){
+    const div = document.createElement('div');
+    div.className = 'alert';
+    div.id = id;
+    div.innerHTML = `<span class="ico">⚠</span><b>${label.toUpperCase()}</b><span class="msg">flag transitioned to active — check the fault panel below.</span>`;
+    $('alerts').prepend(div);
+    setTimeout(() => { div.remove(); }, 15000);
+  }
+}
+
+function render(msg){
+  const p1 = msg.part1 || {};
+  const p2 = msg.part2 || {};
+  const p3 = msg.part3 || {};
+  const meta = msg.meta || {};
+
+  lastMsgTime = Date.now();
+
+  // ---- header ----
+  $('modeLabel').textContent = `SOURCE: ${(meta.source||'—').toUpperCase()} — ${meta.detail||''}`;
+  $('hdrScenario').textContent = meta.scenario_label || p1.scenario_id || '—';
+  const uptimeMs = Number(p1.uptime_ms);
+  if (!Number.isNaN(uptimeMs)){
+    const s = Math.floor(uptimeMs/1000);
+    const hh = String(Math.floor(s/3600)).padStart(2,'0');
+    const mm = String(Math.floor((s%3600)/60)).padStart(2,'0');
+    const ss = String(s%60).padStart(2,'0');
+    $('hdrUptime').textContent = `${hh}:${mm}:${ss}`;
+  }
+  setPill($('statePill'), $('statePillText'), p2.health_state, p2.health_state);
+  $('liveMeta').textContent = `Sample #${p1.sample_id ?? meta.samples_processed ?? '—'}`;
+
+  // ---- executive summary ----
+  paintRing($('ringOverall'), p2.overall_health_score);
+  $('valOverall').textContent = num(p2.overall_health_score,0);
+  $('subOverall').textContent = `deg idx ${num(p2.degradation_index,3)} · ${num(p2.degradation_rate,4)}/min`;
+
+  paintSemi($('ringCpu'), p2.cpu_health_score);
+  $('valCpu').textContent = num(p2.cpu_health_score,0)+'%';
+  $('subCpuCur').textContent = pct(p1.cpu_utilization,1);
+  const cpuTrendEl = $('subCpuTrend');
+  cpuTrendEl.textContent = p2.cpu_trend || '—';
+  cpuTrendEl.className = 'trend ' + (p2.cpu_trend==='DEGRADING'?'up':p2.cpu_trend==='IMPROVING'?'down':'stable');
+
+  paintRing($('ringMem'), p2.memory_health_score);
+  $('valMem').textContent = num(p2.memory_health_score,0);
+  $('subMem').textContent = `${fmtBytes(p1.used_heap)} / ${fmtBytes(p1.total_heap)}`;
+
+  paintRing($('ringStack'), p2.stack_health_score);
+  $('valStack').textContent = num(p2.stack_health_score,0);
+  $('subStack').textContent = `HWM ${num(p1.stack_high_water_mark,0)} · ${truthy(p2.stack_risk_flag)?'HIGH':'LOW'} risk`;
+
+  paintRing($('ringAi'), p2.ai_health_score);
+  $('valAi').textContent = num(p2.ai_health_score,0);
+  $('subAi').textContent = `${num(p1.inference_time,1)} ms · ${num(p1.inference_frequency,1)} Hz`;
+
+  paintRing($('ringTiming'), p2.timing_health_score);
+  $('valTiming').textContent = num(p2.timing_health_score,0);
+  $('subTiming').textContent = `misses ${num(p1.deadline_misses,0)} · jitter ${num(p1.task_jitter,2)} ms`;
+
+  // ---- charts (Part 1 live resource monitoring) ----
+  const t = (sampleStartTime === null) ? (sampleStartTime = Date.now()/1000, 0) : (Date.now()/1000 - sampleStartTime);
+  charts.cpu.push(t, {cpu: p1.cpu_utilization});
+  charts.mem.push(t, {heap: p1.heap_utilization});
+  charts.stack.push(t, {stack: p1.stack_utilization});
+  charts.infer.push(t, {infer: p1.inference_time});
+  charts.deg.push(t, {deg: p2.degradation_index});
+
+  cpuAgg.min = Math.min(cpuAgg.min, Number(p1.cpu_utilization)||cpuAgg.min);
+  cpuAgg.max = Math.max(cpuAgg.max, Number(p1.cpu_utilization)||cpuAgg.max);
+  cpuAgg.sum += Number(p1.cpu_utilization)||0; cpuAgg.n++;
+  $('cpuCur').textContent = pct(p1.cpu_utilization,1);
+  $('cpuMean').textContent = num(p2.cpu_mean,1)+'%';
+  $('cpuMin').textContent = isFinite(cpuAgg.min)? cpuAgg.min.toFixed(1)+'%':'—';
+  $('cpuMax').textContent = isFinite(cpuAgg.max)? cpuAgg.max.toFixed(1)+'%':'—';
+
+  $('memUsed').textContent = fmtBytes(p1.used_heap);
+  $('memFree').textContent = fmtBytes(p1.free_heap);
+  $('memMinFree').textContent = fmtBytes(p1.minimum_free_heap);
+  const mg = $('memGrowth'); mg.textContent = `${num(p2.heap_growth_rate,3)}/min`;
+  mg.className = 'v trend ' + (Number(p2.heap_growth_rate)>0.5?'up':Number(p2.heap_growth_rate)<-0.5?'down':'stable');
+
+  $('stackCur').textContent = pct(p1.stack_utilization,1);
+  $('stackHwm').textContent = num(p1.stack_high_water_mark,0);
+  const st = $('stackTrend'); st.textContent = p2.stack_trend||'—';
+  st.className='v trend '+(p2.stack_trend==='DEGRADING'?'up':p2.stack_trend==='IMPROVING'?'down':'stable');
+  $('stackRisk').textContent = truthy(p2.stack_risk_flag) ? 'HIGH' : 'LOW';
+
+  $('inferCur').textContent = num(p1.inference_time,1)+' ms';
+  $('inferAvg').textContent = num(p1.average_inference_time,1)+' ms';
+  $('inferMin').textContent = num(p1.min_inference_time,1)+' ms';
+  $('inferMax').textContent = num(p1.max_inference_time,1)+' ms';
+
+  // ---- task & realtime performance ----
+  $('taskName').textContent = p1.task_name || '—';
+  const tsBadge = $('taskStateBadge');
+  tsBadge.textContent = p1.task_state || '—';
+  const running = (p1.task_state === 'RUNNING');
+  tsBadge.style.background = running ? 'var(--good-dim)' : 'var(--warn-dim)';
+  tsBadge.style.color = running ? 'var(--good)' : 'var(--warn)';
+  $('taskPriority').textContent = p1.task_priority ?? '—';
+  $('taskExecCount').textContent = num(p1.task_execution_count,0);
+  $('taskPeriod').textContent = num(p1.task_period,0)+' ms';
+  $('taskJitter').textContent = num(p1.task_jitter,2)+' ms';
+
+  $('tblExecTime').textContent = num(p1.task_execution_time,2)+' ms';
+  $('tblSchedDelay').textContent = num(p1.scheduler_delay,2)+' ms';
+  $('tblDeadlineMisses').textContent = num(p1.deadline_misses,0);
+  $('tblCtxSwitch').textContent = num(p1.context_switches,0);
+  $('tblTaskSwitch').textContent = num(p1.task_switches,0);
+  $('tblActiveTasks').textContent = num(p1.active_task_count,0);
+
+  const timeline = $('taskTimeline');
+  const seg = document.createElement('div');
+  seg.className = 'seg';
+  seg.style.background = running ? 'var(--good)' : (p1.task_state==='BLOCKED' ? 'var(--warn)' : 'var(--text-faint)');
+  timeline.appendChild(seg);
+  while (timeline.children.length > 80) timeline.removeChild(timeline.firstChild);
+
+  // ---- AI / comm / reliability ----
+  $('aiBig').textContent = num(p1.inference_time,1)+' ms';
+  $('aiMin').textContent = num(p1.min_inference_time,1);
+  $('aiAvg').textContent = num(p1.average_inference_time,1);
+  $('aiFreq').textContent = num(p1.inference_frequency,1)+' Hz';
+  const aiFlag = truthy(p2.ai_latency_flag);
+  const aiPill = $('aiLatencyPill');
+  aiPill.className = 'pill ' + (aiFlag ? 'critical' : 'healthy');
+  aiPill.querySelector('span:last-child')?.remove();
+  aiPill.lastChild.textContent = aiFlag ? '⚠ AI LATENCY HIGH' : 'NORMAL';
+
+  const qUtil = Number(p1.queue_utilization)||0;
+  $('queuePct').textContent = qUtil.toFixed(0)+'%';
+  $('queueLenCap').textContent = `${p1.queue_length ?? '—'}/${p1.queue_capacity ?? '—'}`;
+  $('queueBar').style.width = clamp(qUtil,0,100)+'%';
+  $('queueBar').style.background = truthy(p2.queue_overflow_flag) ? 'var(--bad)' : 'var(--info)';
+  const qg = $('queueGrowth'); qg.textContent = `${num(p2.queue_growth_rate,2)}/min`;
+  qg.className = 'v trend ' + (Number(p2.queue_growth_rate)>0.5?'up':Number(p2.queue_growth_rate)<-0.5?'down':'stable');
+
+  $('msgSent').textContent = num(p1.messages_sent,0);
+  $('msgRecv').textContent = num(p1.messages_received,0);
+  $('msgDropped').textContent = num(p1.dropped_messages,0);
+  $('irqLatency').textContent = num(p1.interrupt_latency,3)+' μs';
+
+  $('powerVal').textContent = num(p1.power_consumption,1)+' mW';
+  $('tempVal').textContent = num(p1.system_temperature,1)+' °C';
+
+  const wd = Number(p1.watchdog_resets)||0, rs = Number(p1.system_resets)||0;
+  const relW = $('relWatchdog'); relW.querySelector('.rv').textContent = wd; relW.classList.toggle('nonzero', wd>0);
+  const relR = $('relResets'); relR.querySelector('.rv').textContent = rs; relR.classList.toggle('nonzero', rs>0);
+
+  // ---- health matrix (part 2) ----
+  HEALTH_DIMENSIONS.forEach(([key]) => {
+    const val = p2[key];
+    const valEl = $('hm_'+key);
+    if (valEl) valEl.textContent = num(val,0);
+    const state = Number(val) >= 80 ? 'HEALTHY' : Number(val) >= 55 ? 'WARNING' : 'CRITICAL';
+    setPill($('hmp_'+key), $('hmp_'+key), state, state);
+  });
+
+  $('degIndex').textContent = num(p2.degradation_index,4);
+  $('degRate').textContent = num(p2.degradation_rate,5)+'/min';
+  $('degHealthChange').textContent = num(p2.health_change_rate,4)+'/min';
+
+  // ---- fault detection ----
+  let activeCount = 0;
+  Object.entries(FAULT_LABELS).forEach(([key,label]) => {
+    const active = truthy(p2[key]);
+    if (active) activeCount++;
+    const el = $('fault_'+key);
+    if (el){
+      el.className = 'fault-status ' + (active?'active':'clear');
+      el.innerHTML = `<span class="fdot"></span>${active?'✕ ACTIVE':'● CLEAR'}`;
+    }
+    if (prevFlags[key] === false && active === true) renderAlert(key, label, true);
+    prevFlags[key] = active;
+  });
+  const fcBadge = $('faultCountBadge');
+  fcBadge.textContent = `${activeCount} ACTIVE`;
+  fcBadge.style.background = activeCount>0 ? 'var(--bad-dim)' : 'var(--good-dim)';
+  fcBadge.style.color = activeCount>0 ? 'var(--bad)' : 'var(--good)';
+
+  if (p2.fault_count && Number(p2.fault_count) > 0){
+    $('faultType').textContent = `${p2.fault_type || 'UNKNOWN'} · count ${p2.fault_count}`;
+  } else {
+    $('faultType').textContent = 'No active faults';
+  }
+  setPill($('faultSeverityPill'), $('faultSeverityPill'), p2.fault_severity, p2.fault_severity || 'NONE');
+
+  // ---- predictive reliability (part 3) ----
+  $('predCurrent').textContent = num(p3.current_health,0)+'%';
+  setPill($('predCurrentPill'), $('predCurrentPill'), p3.health_state, p3.health_state);
+  $('predFuture').textContent = num(p3.predicted_health,0)+'%';
+  const predState = Number(p3.predicted_health) >= 80 ? 'HEALTHY' : Number(p3.predicted_health) >= 55 ? 'WARNING' : 'CRITICAL';
+  setPill($('predFuturePill'), $('predFuturePill'), predState, predState);
+  $('predCurDeg').textContent = num(p3.current_degradation_rate,4)+'/min';
+  $('predFutDeg').textContent = num(p3.predicted_degradation_rate,4)+'/min';
+
+  paintRing($('ringFailure'), p3.failure_probability, 100);
+  $('valFailure').textContent = num(p3.failure_probability,0)+'%';
+  setPill($('riskPill'), $('riskPill'), (p3.risk_level||'').toLowerCase()==='low'?'healthy':(p3.risk_level||'').toLowerCase()==='medium'?'warning':'critical', `RISK: ${p3.risk_level||'—'}`);
+
+  $('rsulHours').textContent = (p3.predicted_rsul_hours!==undefined && p3.predicted_rsul_hours!==null) ? `${num(p3.predicted_rsul_hours,1)} H` : '— H';
+  $('rsulConf').textContent = pct(p3.rsul_confidence,0);
+  $('rsulCritTime').textContent = p3.predicted_critical_time ? new Date(p3.predicted_critical_time).toLocaleString() : '—';
+
+  // dominant factor (engine gives one dominant factor + its contribution;
+  // shown as the lead bar, with the remaining health dimensions' relative
+  // degradation shown beneath it for context)
+  const factorList = $('factorList');
+  factorList.innerHTML = '';
+  const factors = [[p3.dominant_degradation_factor || 'Unknown', Number(p3.factor_contribution)||0, true]];
+  const others = [
+    ['CPU', 100-Number(p2.cpu_health_score||100)],
+    ['Memory', 100-Number(p2.memory_health_score||100)],
+    ['AI', 100-Number(p2.ai_health_score||100)],
+    ['Queue', 100-Number(p2.resource_health_score||100)],
+  ].filter(o => o[0].toLowerCase() !== String(factors[0][0]).toLowerCase());
+  const maxOther = Math.max(1, ...others.map(o=>o[1]));
+  others.forEach(o => factors.push([o[0], (o[1]/maxOther)*Math.max(5, 100-factors[0][1]), false]));
+  factors.forEach(([label, val, lead]) => {
+    const row = document.createElement('div');
+    row.className = 'factor-row';
+    row.innerHTML = `<div class="flabel">${label}</div><div class="ftrack"><div class="ffill" style="width:${clamp(val,0,100)}%; background:${lead?'var(--bad)':'var(--info)'};"></div></div><div class="fpct">${val.toFixed(0)}%</div>`;
+    factorList.appendChild(row);
+  });
+
+  const reco = $('recoCard');
+  reco.className = 'card reco-card priority-' + (p3.recommendation_priority || 'LOW');
+  $('recoText').textContent = p3.recommendation || 'No recommendation available yet.';
+  setPill($('recoPriorityPill'), $('recoPriorityPill'), (p3.recommendation_priority||'').toLowerCase()==='low'?'healthy':(p3.recommendation_priority||'').toLowerCase()==='medium'?'warning':'critical', `PRIORITY: ${p3.recommendation_priority||'—'}`);
+
+  // ---- detailed metric tables ----
+  fillTable('tblPart1', p1);
+  fillTable('tblPart2', p2);
+  fillTable('tblPart3', p3);
+}
+
+function fillTable(id, obj){
+  const tbl = $(id);
+  tbl.innerHTML = '';
+  Object.entries(obj).forEach(([k,v]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="k">${k}</td><td class="v">${v===null||v===undefined||v===''?'—':v}</td>`;
+    tbl.appendChild(tr);
+  });
+}
+
+/* =========================================================================
+   WebSocket connection + staleness watchdog
+   ========================================================================= */
+let ws = null;
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { $('liveDot').className='dot'; $('liveText').textContent='LIVE'; };
+  ws.onclose = () => { $('liveDot').className='dot off'; $('liveText').textContent='DISCONNECTED'; setTimeout(connect, 1500); };
+  ws.onerror = () => { ws.close(); };
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'sample') render(msg);
+    else if (msg.type === 'status' && msg.meta){
+      $('modeLabel').textContent = `SOURCE: ${(msg.meta.source||'—').toUpperCase()} — ${msg.meta.detail||msg.meta.status||''}`;
+    }
+  };
+}
+connect();
+
+setInterval(() => {
+  const age = (Date.now() - lastMsgTime)/1000;
+  const dot = $('liveDot');
+  if (ws && ws.readyState === WebSocket.OPEN){
+    if (age > 4){
+      dot.className = 'dot stale';
+      $('liveText').textContent = `⚠ DATA STALE`;
+      $('liveMeta').textContent = `Last received: ${age.toFixed(1)}s ago`;
+    } else {
+      dot.className = 'dot';
+      $('liveText').textContent = 'LIVE';
+    }
+  }
+}, 1000);
+</script>
+</body>
+</html>

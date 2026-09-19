@@ -1,0 +1,4 @@
+# Dependencies for dashboard_server.py (the web dashboard bridge).
+# Install with: pip install -r dashboard_requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29

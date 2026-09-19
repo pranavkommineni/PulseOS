@@ -1,6 +1,0 @@
-model_file,model_name,target,horizon,rows,split,task,r2,mae,rmse,baseline_r2,baseline_rmse,skill_vs_persistence,beats_baseline,accuracy,precision,recall,f1,roc_auc,pr_auc,baseline_f1
-best_degradation_index.joblib,gradient_boosting,future_degradation_index,10,14971,all,regression,0.9624715076243824,2.6073834422432993,3.3365503968488164,0.9441583238420999,4.070018215313755,0.18021241666811472,True,,,,,,,
-best_degradation_rate.joblib,hist_gradient_boosting,future_degradation_rate,10,14971,all,regression,-0.0035413206915115847,3.0939182266684893,3.8935651297623086,-0.986193704624893,5.477603781524446,0.28918459876652325,True,,,,,,,
-best_health.joblib,hist_gradient_boosting,future_health,10,14971,all,regression,0.9664584255257102,1.9971380425746643,2.564078613531196,0.9483933763929273,3.1804775682733184,0.19380704359967094,True,,,,,,,
-best_latency.joblib,ridge,future_latency,10,14971,all,regression,0.9483832710781367,5.426232327255468,6.889576243925858,0.9101890524274749,9.087865911281781,0.24189283697803476,True,,,,,,,
-future_criticality.joblib,RandomForestClassifier,future_latency,10,14971,all,classification,,,,,,,False,0.9579186427092379,0.8298086606243706,0.9526011560693641,0.8869752421959096,0.9935449680094358,0.9709887418673804,0.8909441233140655
