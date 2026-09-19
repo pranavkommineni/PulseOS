@@ -21,12 +21,12 @@ CSV_PATH = "amr_dataset.csv"
 XLSX_PATH = "amr_dataset.xlsx"
 XLSX_REWRITE_EVERY_N_ROWS = 15
 
-# Matches the start of the header line printed by esp32_amr_monitor.ino
+# Matches the start of the header line printed by arduino_ide.ino
 EXPECTED_HEADER_PREFIX = "timestamp,sample_id,uptime_ms,scenario_id"
 
 
 def find_esp32_port():
-    """Look for a plausible ESP32 USB-serial device. Returns port name or None."""
+    """Look for a plausible ESP32-S3 USB-serial device. Returns port name or None."""
     ports = list(list_ports.comports())
     if not ports:
         return None
@@ -39,6 +39,10 @@ def find_esp32_port():
         "USB-SERIAL",
         "USB2.0-Serial",
         "Silicon Labs",
+        # ESP32-S3 boards that use the chip's built-in native USB (no
+        # separate USB-UART bridge chip) show up under these instead.
+        "USB JTAG/serial debug unit",
+        "303A",
     ]
 
     for p in ports:
@@ -55,7 +59,7 @@ def find_esp32_port():
 def try_connect(port):
     try:
         ser = serial.Serial(port, BAUD_RATE, timeout=2)
-        time.sleep(2)  # allow ESP32 auto-reset + boot after opening the port
+        time.sleep(2)  # allow ESP32-S3 auto-reset + boot after opening the port
         return ser
     except Exception as e:
         print(f"Could not open {port}: {e}")
@@ -102,22 +106,22 @@ def main():
         "--load",
         choices=["low", "normal", "high"],
         default=None,
-        help="Send 'L'/'N'/'H' to set the ESP32's load level on startup",
+        help="Send 'L'/'N'/'H' to set the ESP32-S3's load level on startup",
     )
     parser.add_argument(
         "--retry-seconds",
         type=int,
         default=5,
-        help="How often to retry detecting the ESP32 if not found",
+        help="How often to retry detecting the ESP32-S3 if not found",
     )
     args = parser.parse_args()
 
     port = args.port or find_esp32_port()
 
     if not port:
-        print("NOT LIVE: no ESP32 detected on any USB serial port.")
+        print("NOT LIVE: no ESP32-S3 detected on any USB serial port.")
         print(
-            "Plug in the ESP32 (flashed with esp32_amr_monitor.ino) and re-run this script."
+            "Plug in the ESP32-S3 (flashed with arduino_ide.ino) and re-run this script."
         )
         return
 
@@ -126,7 +130,7 @@ def main():
         print(f"NOT LIVE: found port {port} but could not open a live connection.")
         return
 
-    print(f"LIVE: connected to ESP32 on {port} @ {BAUD_RATE} baud")
+    print(f"LIVE: connected to ESP32-S3 on {port} @ {BAUD_RATE} baud")
     print(
         f"Logging to {CSV_PATH} (and refreshing {XLSX_PATH} every {XLSX_REWRITE_EVERY_N_ROWS} rows). "
         f"3 rows are written per monitoring cycle (one per task). Ctrl+C to stop."
@@ -135,7 +139,7 @@ def main():
     if args.load:
         cmd = {"low": b"L\n", "normal": b"N\n", "high": b"H\n"}[args.load]
         ser.write(cmd)
-        print(f"Sent load_level={args.load.upper()} command to ESP32.")
+        print(f"Sent load_level={args.load.upper()} command to ESP32-S3.")
 
     header_cols = None
     row_count = 0

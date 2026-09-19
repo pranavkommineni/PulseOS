@@ -5,33 +5,35 @@
 #include "esp_system.h"
 #include <DHT.h>
 
-// ---------- Optional camera support ----------
-// #define USE_CAMERA
 #ifdef USE_CAMERA
 #include "esp_camera.h"
+
+#define CAM_PWDN_GPIO_NUM -1
+#define CAM_RESET_GPIO_NUM -1
+#define CAM_XCLK_GPIO_NUM 15
+#define CAM_SIOD_GPIO_NUM 4
+#define CAM_SIOC_GPIO_NUM 5
+#define CAM_Y9_GPIO_NUM 16
+#define CAM_Y8_GPIO_NUM 17
+#define CAM_Y7_GPIO_NUM 18
+#define CAM_Y6_GPIO_NUM 12
+#define CAM_Y5_GPIO_NUM 10
+#define CAM_Y4_GPIO_NUM 8
+#define CAM_Y3_GPIO_NUM 9
+#define CAM_Y2_GPIO_NUM 11
+#define CAM_VSYNC_GPIO_NUM 6
+#define CAM_HREF_GPIO_NUM 7
+#define CAM_PCLK_GPIO_NUM 13
 #endif
 
-// ============================================================
-// IMPORTANT: the first 44 CSV columns below (timestamp ... system_resets)
-// are a LOCKED interface contract with health-intelligence
-// (health-intelligence/health_engine/validator.py: REQUIRED_INPUT_METRICS).
-// Their names, order, and meaning must never change -- especially
-// `scenario_id`, which must stay a small integer matching one of the
-// ScenarioProfile keys in health_engine/config.py ("1"-"4"), not free text,
-// or the engine silently falls back to the unweighted "default" profile.
-// New sensors/metrics are appended AFTER system_resets so the locked 44
-// stay byte-for-byte identical in position and name.
-// ============================================================
-
-// ---------- Pin config ----------
-#define IR_PIN 34 // IR obstacle sensor digital OUT (input-only pin)
-#define DHT_PIN 4 // DHT22 DATA line
+// ---------- Other pin config (chosen to avoid camera pins, flash pins
+//             26-32, PSRAM pins 33-37, UART0 43/44, and strapping pins) ----------
+#define IR_PIN 1  // IR obstacle sensor digital OUT
+#define DHT_PIN 2 // DHT22 DATA line
 #define DHT_TYPE DHT22
 
-#define ULTRASONIC_TRIG_PIN 33 // HC-SR04 TRIG (output)
-#define ULTRASONIC_ECHO_PIN 32 // HC-SR04 ECHO (input, 5V sensor needs a divider to 3.3V)
-// NOTE: 32/33 are free on a bare ESP32-CAM/DevKit as long as USE_CAMERA is
-// left undefined above. If you enable USE_CAMERA, move these two pins.
+#define ULTRASONIC_TRIG_PIN 41 // HC-SR04 TRIG (output)
+#define ULTRASONIC_ECHO_PIN 42 // HC-SR04 ECHO (input, 5V sensor needs a divider to 3.3V)
 
 DHT dht(DHT_PIN, DHT_TYPE);
 
@@ -203,11 +205,6 @@ void UltrasonicTask(void *pv)
   }
 }
 
-// ================= "Edge AI" inference stand-in =================
-// Deterministic workload, duration inflatable via the active LoadProfile to
-// emulate real inference-time degradation (thermal throttling, memory
-// pressure, etc). Also performs the heap-churn allocation for this cycle so
-// heap_utilization / minimum_free_heap visibly track g_loadLevel.
 uint32_t runInferenceOnce(const LoadProfile &profile)
 {
   uint32_t start = millis();
@@ -539,12 +536,10 @@ void Monitor_Task(void *pv)
     {
       TaskHandle_t h = rows[i].handle;
       UBaseType_t hwm = h ? uxTaskGetStackHighWaterMark(h) : 0;
-      // NOTE: on ESP32's Xtensa FreeRTOS port, StackType_t is uint8_t, so
-      // uxTaskGetStackHighWaterMark() already returns BYTES, not 4-byte
-      // words (that "* 4" assumption is only correct on Cortex-M ports).
-      // The old "* 4" here was the actual bug behind the negative/garbage
-      // stack_utilization values you were seeing (e.g. hwm 3660 bytes was
-      // being reported as 14640, exceeding the whole 8192-byte stack).
+      // NOTE: on ESP32/ESP32-S3's Xtensa FreeRTOS port, StackType_t is
+      // uint8_t, so uxTaskGetStackHighWaterMark() already returns BYTES,
+      // not 4-byte words (that "* 4" assumption only applies to Cortex-M
+      // ports).
       uint32_t hwmBytes = hwm;
       float stackUtilPct = 100.0f * (rows[i].allocatedStackBytes - (float)hwmBytes) / rows[i].allocatedStackBytes;
       eTaskState state = h ? eTaskGetState(h) : eInvalid;
@@ -593,14 +588,68 @@ void classifyAndCountResetReason()
   }
 }
 
+// ================= Camera init (ESP32-S3, OV2640) =================
+#ifdef USE_CAMERA
+bool initCamera()
+{
+  camera_config_t config = {}; // zero-init: any field not set below is
+                               // otherwise garbage from the stack, which
+                               // is undefined behavior inside the camera
+                               // driver and a plausible hang/crash source.
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = CAM_Y2_GPIO_NUM;
+  config.pin_d1 = CAM_Y3_GPIO_NUM;
+  config.pin_d2 = CAM_Y4_GPIO_NUM;
+  config.pin_d3 = CAM_Y5_GPIO_NUM;
+  config.pin_d4 = CAM_Y6_GPIO_NUM;
+  config.pin_d5 = CAM_Y7_GPIO_NUM;
+  config.pin_d6 = CAM_Y8_GPIO_NUM;
+  config.pin_d7 = CAM_Y9_GPIO_NUM;
+  config.pin_xclk = CAM_XCLK_GPIO_NUM;
+  config.pin_pclk = CAM_PCLK_GPIO_NUM;
+  config.pin_vsync = CAM_VSYNC_GPIO_NUM;
+  config.pin_href = CAM_HREF_GPIO_NUM;
+  config.pin_sscb_sda = CAM_SIOD_GPIO_NUM;
+  config.pin_sscb_scl = CAM_SIOC_GPIO_NUM;
+  config.pin_pwdn = CAM_PWDN_GPIO_NUM;
+  config.pin_reset = CAM_RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_GRAYSCALE;
+  config.frame_size = FRAMESIZE_QQVGA; // 160x120, keeps inference stand-in cheap
+  config.fb_count = 1;
+  config.fb_location = CAMERA_FB_IN_PSRAM; // N16R8 has 8MB PSRAM, use it
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK)
+  {
+    Serial.printf("# camera init FAILED, error 0x%x -- check CAM_* pin defines for your board\n", err);
+    return false;
+  }
+  return true;
+}
+#endif
+
 void setup()
 {
   Serial.begin(115200);
   delay(500);
+  Serial.println("# booting..."); // if you never see even this line, the
+                                  // problem is before setup() runs at all
+                                  // (wrong COM port, wrong baud, or the
+                                  // board is stuck in the USB bootloader
+                                  // -- see the troubleshooting notes below).
 
   classifyAndCountResetReason();
 
-  pinMode(IR_PIN, INPUT); // GPIO34 is input-only, no internal pull available
+  pinMode(IR_PIN, INPUT_PULLUP); // was plain INPUT: a floating pin with no
+                                 // pull resistor can fire CHANGE
+                                 // interrupts continuously and burn CPU
+                                 // for no reason. Most IR obstacle
+                                 // sensors are active-low/open-collector,
+                                 // so pulling up is also the electrically
+                                 // correct choice.
   attachInterrupt(digitalPinToInterrupt(IR_PIN), irObstacleISR, CHANGE);
 
   pinMode(ULTRASONIC_TRIG_PIN, OUTPUT);
@@ -610,34 +659,14 @@ void setup()
   dht.begin();
 
 #ifdef USE_CAMERA
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = 5;
-  config.pin_d1 = 18;
-  config.pin_d2 = 19;
-  config.pin_d3 = 21;
-  config.pin_d4 = 36;
-  config.pin_d5 = 39;
-  config.pin_d6 = 34;
-  config.pin_d7 = 35;
-  config.pin_xclk = 0;
-  config.pin_pclk = 22;
-  config.pin_vsync = 25;
-  config.pin_href = 23;
-  config.pin_sscb_sda = 26;
-  config.pin_sscb_scl = 27;
-  config.pin_pwdn = 32;
-  config.pin_reset = -1;
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_GRAYSCALE;
-  config.frame_size = FRAMESIZE_QQVGA;
-  config.fb_count = 1;
-  esp_camera_init(&config);
+  Serial.println("# camera init start...");
+  initCamera();
+  Serial.println("# camera init done.");
 #endif
 
   obstacleQueue = xQueueCreate(QUEUE_LEN, sizeof(ObstacleMessage));
 
+  // ESP32-S3 is dual-core just like ESP32, so core pinning stays the same.
   xTaskCreatePinnedToCore(AI_Task, "AI_Task", 8192, NULL, 2, &aiTaskHandle, 1);
   xTaskCreatePinnedToCore(MotorControl_Task, "MotorControl_Task", 4096, NULL, 3, &motorTaskHandle, 1);
   xTaskCreatePinnedToCore(Monitor_Task, "Monitor_Task", 4096, NULL, 1, &monitorTaskHandle, 0);
@@ -645,13 +674,8 @@ void setup()
 
   Serial.println("# Ready. Send 'L' = low load, 'N' = normal load, 'H' = high load.");
 }
-
 void loop()
 {
-  // Serial commands from the laptop side:
-  //   'L' + Enter -> LOAD_LOW    (scenario_id 4, baseline heap/stack/CPU)
-  //   'N' + Enter -> LOAD_NORMAL (scenario_id 1, default operating point)
-  //   'H' + Enter -> LOAD_HIGH   (scenario_id 2, stress heap/stack/CPU)
   if (Serial.available())
   {
     char c = Serial.read();
