@@ -1,0 +1,6 @@
+model_file,model_name,target,horizon,rows,split,task,r2,mae,rmse,baseline_r2,baseline_rmse,skill_vs_persistence,beats_baseline,accuracy,precision,recall,f1,roc_auc,pr_auc,baseline_f1
+best_degradation_index.joblib,random_forest,future_degradation_index,10,1330,all,regression,-53.078106522452046,0.8724248832507061,0.8827617759933073,0.6712680994376052,0.06882618643982553,-11.82595799151392,False,,,,,,,
+best_degradation_rate.joblib,ridge,future_degradation_rate,10,1330,all,regression,-160753458343.87057,2273.1917230398753,2327.164828762781,-0.22400004591256373,0.006421517926565572,-362400.048377579,False,,,,,,,
+best_health.joblib,gradient_boosting,future_health,10,1330,all,regression,0.7181206365266009,2.004717548751536,6.400319412778788,0.7339982153505981,6.21744972861217,-0.029412330159272138,False,,,,,,,
+best_latency.joblib,extra_trees,future_latency,10,1330,all,regression,0.5705841490390808,2.2879721102756907,3.1966734887985613,0.7893284897846938,2.239041524058073,-0.42769727780879263,False,,,,,,,
+future_criticality.joblib,RandomForestClassifier,future_latency,10,1330,all,classification,,,,,,,False,1.0,0.0,0.0,0.0,,,0.0

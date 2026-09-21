@@ -1,21 +1,3 @@
-"""
-Correlated Synthetic Telemetry Generator for Person 2 Testing and Benchmarking.
-
-Generates realistic, physically and logically correlated multivariate telemetry sequences
-for all 11 operational scenarios:
-1. HEALTHY
-2. CPU_OVERLOAD
-3. MEMORY_LEAK
-4. HEAP_EXHAUSTION
-5. STACK_RISK
-6. DEADLINE_DEGRADATION
-7. TASK_STARVATION
-8. AI_LATENCY
-9. QUEUE_CONGESTION
-10. MULTIPLE_FAULTS
-11. RECOVERY
-"""
-
 import math
 import random
 from typing import List, Dict, Any, Optional
@@ -31,7 +13,9 @@ class SyntheticTelemetryGenerator:
         self.total_heap = 1048576  # 1 MB Heap
         self.queue_capacity = 100
 
-    def _base_reading(self, sample_id: int, timestamp: float, uptime_ms: float, scenario_id: str = "1") -> Dict[str, Any]:
+    def _base_reading(
+        self, sample_id: int, timestamp: float, uptime_ms: float, scenario_id: str = "1"
+    ) -> Dict[str, Any]:
         """Generate baseline healthy values with slight natural noise."""
         cpu = round(self.rng.uniform(22.0, 32.0), 2)
         idle = round(100.0 - cpu, 2)
@@ -106,7 +90,7 @@ class SyntheticTelemetryGenerator:
         num_samples: int = 20,
         start_time: float = 1000.0,
         step_sec: float = 1.0,
-        scenario_id: str = "1"
+        scenario_id: str = "1",
     ) -> List[Dict[str, Any]]:
         """
         Generate a complete time series of correlated telemetry records for a named scenario.
@@ -118,11 +102,13 @@ class SyntheticTelemetryGenerator:
         for i in range(num_samples):
             t = start_time + i * step_sec
             uptime = (t - start_time) * 1000.0 + 5000.0
-            rec = self._base_reading(sample_id=i + 1, timestamp=t, uptime_ms=uptime, scenario_id=scenario_id)
+            rec = self._base_reading(
+                sample_id=i + 1, timestamp=t, uptime_ms=uptime, scenario_id=scenario_id
+            )
             progress = i / max(1, num_samples - 1)
 
             if scenario_name == "HEALTHY":
-                pass # Baseline remains healthy
+                pass  # Baseline remains healthy
 
             elif scenario_name == "CPU_OVERLOAD":
                 # CPU climbs to 94%, idle collapses, thermal rises, power rises
@@ -156,7 +142,9 @@ class SyntheticTelemetryGenerator:
                 # Stack utilization climbs to 94%, watermark collapses below critical floor
                 stack_u = min(95.0, 40.0 + progress * 54.0)
                 rec["stack_utilization"] = round(stack_u, 2)
-                rec["stack_high_water_mark"] = max(32, int(4096 * (1.0 - stack_u / 100.0)))
+                rec["stack_high_water_mark"] = max(
+                    32, int(4096 * (1.0 - stack_u / 100.0))
+                )
 
             elif scenario_name == "DEADLINE_DEGRADATION":
                 # Execution time exceeds period (55ms > 50ms), deadline misses accumulate
@@ -189,7 +177,9 @@ class SyntheticTelemetryGenerator:
                 # Queue length fills to capacity, dropped messages begin accumulating
                 q_len = min(100, int(15 + progress * 88))
                 rec["queue_length"] = q_len
-                rec["queue_utilization"] = round((q_len / self.queue_capacity) * 100.0, 2)
+                rec["queue_utilization"] = round(
+                    (q_len / self.queue_capacity) * 100.0, 2
+                )
                 if q_len >= 95:
                     cum_dropped += int(1 + progress * 4)
                 rec["dropped_messages"] = cum_dropped
@@ -204,7 +194,9 @@ class SyntheticTelemetryGenerator:
                 rec["average_inference_time"] = inf_t
                 q_len = min(100, int(80 + progress * 18))
                 rec["queue_length"] = q_len
-                rec["queue_utilization"] = round((q_len / self.queue_capacity) * 100.0, 2)
+                rec["queue_utilization"] = round(
+                    (q_len / self.queue_capacity) * 100.0, 2
+                )
                 if q_len >= 95:
                     rec["dropped_messages"] = int(1 + progress * 6)
 

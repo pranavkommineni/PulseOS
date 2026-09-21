@@ -53,16 +53,6 @@ def add_temporal_features(
     windows=DEFAULT_WINDOWS,
     group_col=None,
 ):
-    """
-    For every signal column adds:
-      <col>__diff<k>   value now minus value k samples ago   (trend / slope)
-      <col>__rmean<w>  rolling mean over the last w samples
-      <col>__rstd<w>   rolling std  over the last w samples  (volatility)
-      <col>__dev<w>    value now minus rolling mean          (short-term deviation)
-
-    Everything looks backwards only (shift(+k), trailing windows), so there is no
-    leakage. Rows without enough history are dropped. Returns (df, new_columns).
-    """
     columns = [c for c in (columns or SOURCE_COLUMNS) if c in df.columns]
     df = df.reset_index(drop=True)
 

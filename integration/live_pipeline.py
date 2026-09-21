@@ -602,7 +602,18 @@ def derive_condition_label(reading, metrics):
     scenario = str(reading.get("scenario_id", "")).strip()
 
     cpu = metrics.get("cpu_mean", 0.0)
-    memory = metrics.get("memory_mean", 0.0)
+    # BUG FIX: metrics["memory_mean"] is the mean of TrendTracker's "memory"
+    # history, which is fed raw heap_utilization values (see TrendTracker.add
+    # above) -- normally a 0-100 percentage, but observed in practice as raw
+    # used_heap byte counts (hundreds of thousands) coming from an upstream
+    # ingestion bug. Comparing that against a ">= 90.0" threshold meant for a
+    # percentage made this branch true for nearly any nonzero memory usage,
+    # mislabeling almost every reading "MEMORY_STRESS" regardless of actual
+    # heap health. Read heap_utilization straight off the current reading
+    # instead (still nominally 0-100) and clamp it so a corrupted value
+    # can't silently trip this label either.
+    memory = TrendTracker.to_float(reading.get("heap_utilization"))
+    memory = max(0.0, min(100.0, memory))
     latency = metrics.get("latency_mean", 0.0)
 
     deadline = TrendTracker.to_float(reading.get("deadline_misses"))

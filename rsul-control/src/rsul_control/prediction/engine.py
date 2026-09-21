@@ -3,11 +3,32 @@
 Detailed mode uses the trained ML models. Legacy mode is a compatibility
 fallback based only on the legacy contract and is explicitly labelled as such.
 """
+
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 import math
+
+# ---------------------------------------------------------------------------
+# BUG FIX: models are pickled with DeltaRegressor, which lives in the
+# top-level `rsul_common.py` module at the rsul-control project root
+# (rsul-control/rsul_common.py). train.py works because it explicitly puts
+# that directory on sys.path before training (see train.py's ROOT/SRC
+# sys.path.insert block). engine.py never did the same thing, so at live
+# inference time joblib.load() looked for a module literally named
+# `rsul_common`, didn't find it on sys.path, and raised
+# "ModuleNotFoundError: No module named 'rsul_common'" while unpickling
+# every model bundle -- silently swallowed by live_pipeline.py's broad
+# try/except around predict_payload(), which is why predicted_health /
+# predicted_degradation_rate / etc. came out blank on every single row
+# instead of erroring loudly. Adding the same directory train.py uses to
+# sys.path here, before any joblib.load happens, fixes unpickling.
+# ---------------------------------------------------------------------------
+_RSUL_CONTROL_ROOT = Path(__file__).resolve().parents[3]
+if str(_RSUL_CONTROL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_RSUL_CONTROL_ROOT))
 
 import joblib
 import numpy as np
@@ -17,7 +38,7 @@ from functools import lru_cache
 from rsul_control.adapter.person2_adapter import adapt
 
 THRESHOLD_MS = 100.0
-MODEL_DIR = Path(__file__).resolve().parents[3] / "models"
+MODEL_DIR = _RSUL_CONTROL_ROOT / "models"
 RESULTS_PATH = Path(__file__).resolve().parents[3] / "results" / "model_comparison.csv"
 
 # Sane physical bound for degradation_rate forecasts. Linear regression can
@@ -36,7 +57,11 @@ def _best_model_per_target() -> dict[str, str]:
     evaluation run, instead of hardcoding one model for every target.
     Falls back to linear_regression if results are unavailable.
     """
-    defaults = {"latency": "linear_regression", "health": "linear_regression", "degradation": "random_forest"}
+    defaults = {
+        "latency": "linear_regression",
+        "health": "linear_regression",
+        "degradation": "random_forest",
+    }
     if not RESULTS_PATH.exists():
         return defaults
     try:
@@ -51,7 +76,7 @@ BEST_MODEL_FOR_TARGET = _best_model_per_target()
 
 
 @lru_cache(maxsize=32)
-def _load_bundle(model_name: str, target: str):
+def _load_bundle(target: str):
     """Load a model bundle from disk once and cache it in memory.
 
     Previously every single prediction re-read and re-unpickled the .joblib
@@ -59,15 +84,35 @@ def _load_bundle(model_name: str, target: str):
     files loaded on every row). Caching brings that down to a few hundred
     microseconds after the first call per model, since the process keeps the
     fitted estimator in memory instead of re-deserializing it every time.
+
+    BUG FIX (was the root cause of predicted_health / predicted_degradation_rate
+    / predicted_rsul_hours always being blank on the live dashboard):
+    train.py (see MODEL_DIR / f"best_{target_name}.joblib" in train.py) only
+    ever writes ONE file per target, named "best_<target>.joblib" -- it does
+    NOT write a separate file per algorithm name. This function used to build
+    the path as f"{model_name}_{target}.joblib" (e.g. "linear_regression_health
+    .joblib" or "random_forest_degradation.joblib"), which never matched any
+    file train.py actually produces. So `path.exists()` was always False,
+    _load_bundle always returned None, and every "predicted_*" field in the
+    RSUL output silently stayed None all the way out to the dashboard -- with
+    no exception raised, since the None-handling code elsewhere in this file
+    is written to tolerate a missing model. The algorithm that produced the
+    "best" model for a target is still recorded inside the bundle itself
+    (bundle["model_name"]), so nothing about model selection is lost -- only
+    the filename lookup was wrong.
     """
-    path = MODEL_DIR / f"{model_name}_{target}.joblib"
+    path = MODEL_DIR / f"best_{target}.joblib"
     if not path.exists():
         return None
     return joblib.load(path)
 
 
 def _load_models_row(row: pd.Series, model_name: str, target: str) -> float | None:
-    bundle = _load_bundle(model_name, target)
+    # model_name (the caller's requested algorithm, e.g. --rsul-model) is kept
+    # in the signature for backward compatibility with callers/tests, but is
+    # no longer used to pick the file: train.py persists a single best model
+    # per target, and that's what's actually on disk to load.
+    bundle = _load_bundle(target)
     if bundle is None:
         return None
     features = bundle["features"]
@@ -79,7 +124,11 @@ def _load_models_row(row: pd.Series, model_name: str, target: str) -> float | No
 
 
 def _risk(prob: float) -> str:
-    return "CRITICAL" if prob >= 80 else "HIGH" if prob >= 60 else "MEDIUM" if prob >= 30 else "LOW"
+    return (
+        "CRITICAL"
+        if prob >= 80
+        else "HIGH" if prob >= 60 else "MEDIUM" if prob >= 30 else "LOW"
+    )
 
 
 def _legacy_prediction(p: dict[str, Any], threshold: float) -> dict[str, Any]:
@@ -100,7 +149,9 @@ def _legacy_prediction(p: dict[str, Any], threshold: float) -> dict[str, Any]:
             critical_time = float(p["timestamp"]) + minutes
         else:
             try:
-                critical_time = (pd.to_datetime(p["timestamp"]) + pd.Timedelta(minutes=minutes)).isoformat()
+                critical_time = (
+                    pd.to_datetime(p["timestamp"]) + pd.Timedelta(minutes=minutes)
+                ).isoformat()
             except Exception:
                 critical_time = None
     else:
@@ -110,16 +161,40 @@ def _legacy_prediction(p: dict[str, Any], threshold: float) -> dict[str, Any]:
     urgency = 55 * math.exp(-rsul / 4) if math.isfinite(rsul) else 0
     proximity = np.clip((100 - health) / 60, 0, 1) * 30
     accel_component = np.clip(abs(accel), 0, 5) * 3
-    probability = float(np.clip(proximity + urgency + accel_component + float(p["cause_confidence"]) * 10, 0, 100))
+    probability = float(
+        np.clip(
+            proximity + urgency + accel_component + float(p["cause_confidence"]) * 10,
+            0,
+            100,
+        )
+    )
 
     cause = p["root_cause"]
     recommendations = {
-        "MEMORY_PRESSURE": ("Inspect memory allocation and schedule safe maintenance before critical health.", "HIGH"),
-        "AI_OVERLOAD": ("Reduce AI inference load or switch to a lighter model before critical health.", "HIGH"),
-        "CPU_OVERLOAD": ("Reduce competing workload and reserve CPU time for perception/control tasks.", "HIGH"),
-        "DEADLINE_MISS": ("Review task priorities, scheduling intervals, and queue contention.", "CRITICAL"),
+        "MEMORY_PRESSURE": (
+            "Inspect memory allocation and schedule safe maintenance before critical health.",
+            "HIGH",
+        ),
+        "AI_OVERLOAD": (
+            "Reduce AI inference load or switch to a lighter model before critical health.",
+            "HIGH",
+        ),
+        "CPU_OVERLOAD": (
+            "Reduce competing workload and reserve CPU time for perception/control tasks.",
+            "HIGH",
+        ),
+        "DEADLINE_MISS": (
+            "Review task priorities, scheduling intervals, and queue contention.",
+            "CRITICAL",
+        ),
     }
-    rec, priority = recommendations.get(cause, ("Continue monitoring degradation and schedule preventive maintenance.", "MEDIUM"))
+    rec, priority = recommendations.get(
+        cause,
+        (
+            "Continue monitoring degradation and schedule preventive maintenance.",
+            "MEDIUM",
+        ),
+    )
 
     return {
         "timestamp": str(p["timestamp"]),
@@ -131,9 +206,13 @@ def _legacy_prediction(p: dict[str, Any], threshold: float) -> dict[str, Any]:
         "predicted_critical_time": critical_time,
         "failure_probability": round(probability, 2),
         "risk_level": _risk(probability),
-        "predicted_rsul_hours": "No predicted crossing" if not math.isfinite(rsul) else round(rsul, 3),
+        "predicted_rsul_hours": (
+            "No predicted crossing" if not math.isfinite(rsul) else round(rsul, 3)
+        ),
         "predicted_failure_time": critical_time,
-        "rsul_confidence": round(float(np.clip(55 + p["cause_confidence"] * 35, 45, 90)), 1),
+        "rsul_confidence": round(
+            float(np.clip(55 + p["cause_confidence"] * 35, 45, 90)), 1
+        ),
         "dominant_degradation_factor": cause,
         "factor_contribution": round(p["cause_confidence"] * 100, 1),
         "recommendation": rec,
@@ -142,9 +221,13 @@ def _legacy_prediction(p: dict[str, Any], threshold: float) -> dict[str, Any]:
     }
 
 
-def _detailed_prediction(payload: dict[str, Any], model_name: str, threshold: float) -> dict[str, Any]:
+def _detailed_prediction(
+    payload: dict[str, Any], model_name: str, threshold: float
+) -> dict[str, Any]:
     row = pd.Series(payload)
-    numeric = [c for c in row.index if c not in {"timestamp", "health_state", "fault_type"}]
+    numeric = [
+        c for c in row.index if c not in {"timestamp", "health_state", "fault_type"}
+    ]
     for c in numeric:
         row[c] = pd.to_numeric(row[c], errors="coerce")
     row = row.copy()
@@ -182,17 +265,25 @@ def _detailed_prediction(payload: dict[str, Any], model_name: str, threshold: fl
     # noise while still tracking genuine fast degradation (which shows up in
     # health_change_rate too, so the blend isn't fighting real crashes).
     health_change_rate = float(row.get("health_change_rate", 0.0) or 0.0)
-    persistence_health = float(np.clip(current_health + health_change_rate * horizon, 0, 100))
+    persistence_health = float(
+        np.clip(current_health + health_change_rate * horizon, 0, 100)
+    )
     if future_health_model is None:
         future_health = None
     else:
-        future_health = float(np.clip(0.5 * future_health_model + 0.5 * persistence_health, 0, 100))
+        future_health = float(
+            np.clip(0.5 * future_health_model + 0.5 * persistence_health, 0, 100)
+        )
 
     if current_latency >= threshold:
         rsul_hours = 0.0
         critical_time = timestamp
     else:
-        slope = ((future_latency - current_latency) / horizon) if future_latency is not None else float(row["latency_growth_rate"])
+        slope = (
+            ((future_latency - current_latency) / horizon)
+            if future_latency is not None
+            else float(row["latency_growth_rate"])
+        )
         if slope <= 0:
             rsul_hours = math.inf
             critical_time = None
@@ -208,24 +299,48 @@ def _detailed_prediction(payload: dict[str, Any], model_name: str, threshold: fl
     probability = float(np.clip(proximity + urgency + trend + faults, 0, 100))
 
     factors = {
-        "AI latency": max(0.0, float(row["latency_growth_rate"])) * 1.8 + (1 if row["ai_latency_flag"] else 0),
-        "CPU load": max(0.0, float(row["cpu_growth_rate"])) * 1.2 + (1 if row["cpu_overload_flag"] else 0),
-        "Memory pressure": max(0.0, float(row["memory_growth_rate"])) * 1.2 + (1 if row["memory_leak_flag"] else 0),
-        "Deadline degradation": max(0.0, float(row["deadline_trend"])) * 2 + (1 if row["deadline_miss_flag"] else 0),
-        "Queue pressure": max(0.0, float(row["queue_growth_rate"])) * 1.2 + (1 if row["queue_overflow_flag"] else 0),
-        "Stack pressure": max(0.0, float(row["stack_growth_rate"])) * 1.1 + (1 if row["stack_risk_flag"] else 0),
+        "AI latency": max(0.0, float(row["latency_growth_rate"])) * 1.8
+        + (1 if row["ai_latency_flag"] else 0),
+        "CPU load": max(0.0, float(row["cpu_growth_rate"])) * 1.2
+        + (1 if row["cpu_overload_flag"] else 0),
+        "Memory pressure": max(0.0, float(row["memory_growth_rate"])) * 1.2
+        + (1 if row["memory_leak_flag"] else 0),
+        "Deadline degradation": max(0.0, float(row["deadline_trend"])) * 2
+        + (1 if row["deadline_miss_flag"] else 0),
+        "Queue pressure": max(0.0, float(row["queue_growth_rate"])) * 1.2
+        + (1 if row["queue_overflow_flag"] else 0),
+        "Stack pressure": max(0.0, float(row["stack_growth_rate"])) * 1.1
+        + (1 if row["stack_risk_flag"] else 0),
     }
     total = sum(factors.values()) or 1
     factor = max(factors, key=factors.get)
     contribution = round(100 * factors[factor] / total, 1)
 
     recs = {
-        "AI latency": ("Optimize or reload the AI model; consider reducing inference frequency.", "HIGH"),
-        "CPU load": ("Reduce competing workload and reserve CPU time for perception/control tasks.", "HIGH"),
-        "Memory pressure": ("Inspect memory allocation and restart the affected service during a safe maintenance window.", "HIGH"),
-        "Deadline degradation": ("Review FreeRTOS task priorities, queue contention, and scheduling intervals.", "CRITICAL"),
+        "AI latency": (
+            "Optimize or reload the AI model; consider reducing inference frequency.",
+            "HIGH",
+        ),
+        "CPU load": (
+            "Reduce competing workload and reserve CPU time for perception/control tasks.",
+            "HIGH",
+        ),
+        "Memory pressure": (
+            "Inspect memory allocation and restart the affected service during a safe maintenance window.",
+            "HIGH",
+        ),
+        "Deadline degradation": (
+            "Review FreeRTOS task priorities, queue contention, and scheduling intervals.",
+            "CRITICAL",
+        ),
     }
-    rec, priority = recs.get(factor, ("Continue monitoring runtime degradation and schedule maintenance if the predicted RSUL continues to decrease.", "MEDIUM"))
+    rec, priority = recs.get(
+        factor,
+        (
+            "Continue monitoring runtime degradation and schedule maintenance if the predicted RSUL continues to decrease.",
+            "MEDIUM",
+        ),
+    )
 
     # Confidence penalizes both a large latency jump AND a degradation forecast
     # that sits far outside the range the model was ever trained on -- the
@@ -233,7 +348,9 @@ def _detailed_prediction(payload: dict[str, Any], model_name: str, threshold: fl
     # and still get reported as "45% confidence" like every other row.
     deg_extrapolation_penalty = 0.0
     if future_deg is not None and _DEGRADATION_TRAIN_MAX > 0:
-        overshoot = max(0.0, future_deg - _DEGRADATION_TRAIN_MAX) / _DEGRADATION_TRAIN_MAX
+        overshoot = (
+            max(0.0, future_deg - _DEGRADATION_TRAIN_MAX) / _DEGRADATION_TRAIN_MAX
+        )
         deg_extrapolation_penalty = min(30.0, overshoot * 15.0)
 
     # Cross-metric reconciliation: failure_probability/risk_level come from a
@@ -257,26 +374,42 @@ def _detailed_prediction(payload: dict[str, Any], model_name: str, threshold: fl
             disagreement_penalty = 20.0
             metrics_consistent = False
 
-    confidence = float(np.clip(
-        92 - abs((future_latency or current_latency) - current_latency) * 2
-        - (0 if current_deg > 0 else 15)
-        - deg_extrapolation_penalty
-        - disagreement_penalty,
-        30, 95,
-    ))
+    confidence = float(
+        np.clip(
+            92
+            - abs((future_latency or current_latency) - current_latency) * 2
+            - (0 if current_deg > 0 else 15)
+            - deg_extrapolation_penalty
+            - disagreement_penalty,
+            30,
+            95,
+        )
+    )
 
     return {
         "timestamp": timestamp.isoformat(),
         "current_health": round(current_health, 2),
         "health_state": str(row["health_state"]),
         "current_degradation_rate": round(current_deg, 4),
-        "predicted_health": None if future_health is None else round(float(np.clip(future_health, 0, 100)), 2),
-        "predicted_degradation_rate": None if future_deg is None else round(max(0.0, float(future_deg)), 4),
-        "predicted_critical_time": None if critical_time is None else critical_time.isoformat(),
+        "predicted_health": (
+            None
+            if future_health is None
+            else round(float(np.clip(future_health, 0, 100)), 2)
+        ),
+        "predicted_degradation_rate": (
+            None if future_deg is None else round(max(0.0, float(future_deg)), 4)
+        ),
+        "predicted_critical_time": (
+            None if critical_time is None else critical_time.isoformat()
+        ),
         "failure_probability": round(probability, 2),
         "risk_level": _risk(probability),
-        "predicted_rsul_hours": "No predicted crossing" if math.isinf(rsul_hours) else round(rsul_hours, 3),
-        "predicted_failure_time": None if critical_time is None else critical_time.isoformat(),
+        "predicted_rsul_hours": (
+            "No predicted crossing" if math.isinf(rsul_hours) else round(rsul_hours, 3)
+        ),
+        "predicted_failure_time": (
+            None if critical_time is None else critical_time.isoformat()
+        ),
         "rsul_confidence": round(confidence, 1),
         "dominant_degradation_factor": factor,
         "factor_contribution": contribution,
@@ -287,7 +420,9 @@ def _detailed_prediction(payload: dict[str, Any], model_name: str, threshold: fl
     }
 
 
-def predict_payload(payload: dict[str, Any], model_name="ridge", threshold=THRESHOLD_MS):
+def predict_payload(
+    payload: dict[str, Any], model_name="ridge", threshold=THRESHOLD_MS
+):
     adapted = adapt(payload)
     if adapted.mode == "legacy":
         return _legacy_prediction(adapted.payload, threshold)
